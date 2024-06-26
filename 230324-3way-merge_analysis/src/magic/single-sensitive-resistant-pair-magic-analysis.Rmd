@@ -1,0 +1,199 @@
+---
+title: "Secondary analysis of 230324-3way-merge RNA-seq for a single resistant/sensitive cellline pair"
+output: html_notebook
+params:
+  experimentalCellLine: "SUPPLY THIS"
+  controlCellLine: "SUPPLY THIS"
+  countmatrix.all: "SUPPLY THIS"
+  metadata.all: "SUPPLY THIS"
+editor_options: 
+  chunk_output_type: inline
+---
+
+## Inputs
+
+```{r load packages, include=FALSE}
+library(tidyverse)
+library(readxl)
+library(DESeq2)
+library(vsn)
+library(pheatmap)
+library(RColorBrewer)
+library(ggrepel)
+library(biomaRt)
+library(DESeqAnalysis)
+library(DEGreport)
+library(UpSetR)
+library(gprofiler2)
+library(rrvgo)
+library(GO.db)
+GO <- as.list(GOTERM)
+```
+
+```{r read parameters pair}
+cont <- params$controlCellLine
+exp <- params$experimentalCellLine
+countmatrix.all <- params$countmatrix.all
+metadata.all <- params$metadata.all
+rm(params) # Remove the parameters so that we can make subsequent parameterized calls
+```
+
+---
+title: "Clustering Atacseq data: `r exp` vs control"
+---
+
+## Gather and organize raw data
+
+```{r restrict to pair}
+metadata.pair <- as.data.frame(metadata.all) %>%
+  filter(CellLine == cont | CellLine == exp)
+as.data.frame(metadata.pair)
+
+countmatrix.pair <- countmatrix.all[, metadata.pair$ShortName]
+as.data.frame(countmatrix.pair)
+```
+
+## Differential expression analysis
+
+Run Deseq on the data set.
+
+```{r setup deseq pair}
+# Having the replicate number in the design makes it a paired design
+dds.pair <- DESeqDataSetFromMatrix(
+  countData = countmatrix.pair,
+  colData = metadata.pair,
+  design = ~ CellLine + Replicate)
+dds.pair$CellLine <- relevel(dds.pair$CellLine, ref = cont)
+```
+
+Using a Wald Test because we are only comparing two cell lines.
+```{r pair deseq}
+dds.pair <- DESeq(dds.pair, "Wald")
+save(dds.pair, file = str_interp("Rdata/${exp}_vs_${cont}_dds.RData"))
+```
+
+## Filter and normalize deseq output
+
+Filter out low-read genes. Only retain genes for which there is a cell line that had at least 1 read for the gene in all of its replicates
+
+```{r pair background genes}
+str_interp("${nrow(countmatrix.pair)} genes before filtration.")
+countmatrix.pair.df <- as.data.frame(countmatrix.pair)
+for(row in 1:nrow(countmatrix.pair.df)) {
+  keepGene <- FALSE
+  
+  # for at least one of the cell lines
+  for (cellline in c(exp, cont)) {
+    allRead <- TRUE
+    
+    # all of the replicates must have at least one read
+    for(i in 1:3) {
+      sampleName <- str_interp("${cellline}_R${i}")
+      if (countmatrix.pair.df[row, sampleName] < 1) {
+        allRead <- FALSE
+      }
+    }
+    
+    if (allRead) {
+      keepGene <- TRUE
+    }
+  }
+  
+  if (keepGene) {
+    countmatrix.pair.df$SufficientReads[row] <- TRUE
+  } else {
+    countmatrix.pair.df$SufficientReads[row] <- FALSE
+  }
+}
+
+countmatrix.pair.filtered <- countmatrix.pair.df %>%
+  filter(SufficientReads)
+
+str_interp("${nrow(countmatrix.pair.filtered)} genes after filtration.")
+
+backgroundGenes.pair <- rownames(countmatrix.pair.filtered)
+```
+
+Filter out the low read genes that are not included in our background gene list.
+```{r ovcar filter deseq}
+# Filter (recalculates p-adjusted values automatically)
+dds.pair.filtered <- subset(dds.pair, rownames(dds.pair) %in% backgroundGenes.pair)
+
+# Pull out results
+res.pair.filtered <- results(dds.pair.filtered, contrast = c("CellLine", exp, cont))
+res.pair.filtered <- as.data.frame(res.pair.filtered[order(res.pair.filtered$padj, decreasing = FALSE),])
+
+as.data.frame(res.pair.filtered)
+
+save(res.pair.filtered, file = str_interp("Rdata/${exp}_vs_${cont}_res_filtered.RData")) 
+
+# Pull out only significant results
+sig.res.pair.filtered <- res.pair.filtered %>% filter(padj < 0.05)
+sig.res.pair.filtered
+
+write.table(
+  as.data.frame(sig.res.pair.filtered),
+  file=str_interp("data/${exp}_vs_${cont}_res_filtered_sig.txt"),
+  sep="\t",
+  quote=F)
+
+# Subset the dds for significant results
+sigGenes.pair <- rownames(sig.res.pair.filtered)
+dds.pair.filtered.sig <- subset(dds.pair.filtered, rownames(dds.pair.filtered) %in% sigGenes.pair)
+```
+
+Normalize the data using the median of ratios method and vst methods. Chosen based on [this training](https://nbisweden.github.io/workshop-RNAseq/1906/lab_dge.html)
+
+```{r normalize the data}
+# Normalize using the median of ratios method, which incorporates sequencing depth and compositional bias
+normalized_counts.pair.filtered <- counts(dds.pair.filtered, normalized=TRUE)
+normalized_counts.pair.filtered.sig <- counts(dds.pair.filtered.sig, normalized=TRUE)
+as.data.frame(counts(dds.pair.filtered)) # non-normalized
+as.data.frame(normalized_counts.pair.filtered) # normalized
+
+write.table(
+  as.data.frame(normalized_counts.pair.filtered),
+  file=str_interp("data/${exp}_vs_${cont}_filtered_normalized_counts.txt"),
+  sep="\t",
+  quote=F,
+  col.names=NA)
+
+write.table(
+  as.data.frame(normalized_counts.pair.filtered.sig),
+  file=str_interp("data/${exp}_vs_${cont}_filtered_sig_normalized_counts.txt"),
+  sep="\t",
+  quote=F,
+  col.names=NA)
+
+# # Normalize using vst, which results in similar variance across samples. This is needed for PCA analysis
+# vst.dds.pair.filtered <- vst(dds.pair.filtered)
+# vst.dds.pair.filtered.sig <- vst(dds.pair.filtered.sig)
+```
+
+## PCA Plots
+
+All background genes. This plots the vst of the counts.
+
+```{r normalized PCA - all background genes}
+# pcaData <- plotPCA(vst.dds.pair.filtered, intgroup = c("CellLine", "ShortName"), returnData = TRUE)
+# percentVar <- round(100 * attr(pcaData, "percentVar"))
+# ggplot(pcaData, aes(PC1, PC2, color = CellLine, label = ShortName)) +
+#   geom_point(size = 3) +
+#   geom_text(hjust = 0, vjust = 0) +
+#   xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+#   ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+#   coord_fixed()
+```
+
+Only significant genes. This plots the vst of the counts.
+
+```{r normalized PCA - only significant for resistance genes}
+# pcaData <- plotPCA(vst.dds.pair.filtered.sig, intgroup = c("CellLine", "ShortName"), returnData = TRUE)
+# percentVar <- round(100 * attr(pcaData, "percentVar"))
+# ggplot(pcaData, aes(PC1, PC2, color = CellLine, label = ShortName)) +
+#   geom_point(size = 3) +
+#   geom_text(hjust = 0, vjust = 0) +
+#   xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+#   ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+#   coord_fixed()
+```

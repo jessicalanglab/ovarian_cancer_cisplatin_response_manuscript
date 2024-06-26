@@ -1,0 +1,388 @@
+---
+title: "DESeq: Ovarian Cancer Cell Line RNAseq Platinum Sensitivity"
+output: html_notebook
+---
+
+## Introduction  
+
+RNA-seq was run on 36 ovarian cancer cell lines, each in singlicate.  
+
+All 36 cell lines have 72h cisplatin IC50s determined by Kristin Adams and Kendra 
+Wendt in the Lang Lab. 
+
+<!-- ![Cisplatin IC50s](CisplatinIC50.jpg){height=50%, width=50%} -->
+
+Add in links to Lab notebooks for IC50, RNAseq sample prep
+
+## Inputs
+
+```{r inputs}
+library(knitr)
+knit("src/load_inputs.Rmd")
+```
+
+## DESeq2
+
+### Create DESeqDataSet object dds
+
+```{r DESeqDataSet generation}
+dds <- DESeqDataSetFromMatrix(countData = countmatrix2,
+                              colData = metadata,
+                              design = ~ PlatinumSensitivity)
+```
+<!-- ### Pre-filtering --> Don't need to filter - this is done automatically
+<!-- This step removes genes with low expression to increase multiple comparison power. -->
+
+<!-- ```{r} -->
+<!-- keep <- rowSums(counts(dds)) >= 500 -->
+<!-- dds <- dds[keep,] -->
+<!-- nrow(dds) -->
+<!-- ``` -->
+
+
+### Run DESeq2 
+```{r DESeq2}
+path = paste0(deseq_Rdata_folder,
+              "/dds_HGSC_categorical.RData")
+
+# Run DESeq
+dds <- DESeq(dds)
+save(dds, file = path)
+
+# Alternatively, if this has already been run, can load dds object
+# load(path)
+```
+
+### Print DESeq results
+```{r create results table}
+res <- results(dds, contrast=c("PlatinumSensitivity", "resistant", "sensitive"))
+res
+
+path = paste0(deseq_output_folder,
+              "/DESeq_HGSC.csv")
+write.csv(as.data.frame(res), file = path)
+```
+
+### Filter DESeq2 results for significant genes
+Filter res for padj < 0.05 and |log2FC| >= 1.2
+```{r filter res}
+res.filtered <- as.data.frame(res) %>%
+  filter(padj<0.05)%>%
+  filter(log2FoldChange >= 1.2 | log2FoldChange <= -1.2)
+res.filtered
+```
+## Data QC
+
+### Data transformation 
+Here we performed normal transformation [log2(n+1)], variance stabilized transformation, and regularized log tranformation to improve visualization of the data values. To speed up subsequent re-runs, we have hidden analysis for non-vst.
+
+```{r norm transformation and stdev plot}
+# ntd <- normTransform(dds)
+# meanSdPlot(assay(ntd))
+```
+
+
+```{r var stab transformation and stdev plot}
+vsd <- vst(dds)
+meanSdPlot(assay(vsd))
+vsd.df = as.data.frame(assay(vsd))
+```
+
+
+```{r reg log transformation and stdev plot}
+# rld <- rlog(dds)
+# meanSdPlot(assay(rld))
+```
+
+Based on this data, variance-stabilized transformation lead to the lowest standard deviation between samples and was mostly located towards the high expression transcripts, as might be expected.
+
+### PCA plot
+```{r vsd PCA}
+pcaData <- plotPCA(vsd, intgroup=c("Subtype", "PlatinumSensitivity","CellLine"), returnData=TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+myColors <- c("#76AB7E", "#63E678", "#1D32FB", "#7B87FD", "#01BD1F", "#E8A426", "#0B7C1D", "#BB19E7")
+names(myColors) <- levels(pcaData$Subtype)
+colScale <- scale_colour_manual(name = "Subtype",values = myColors)
+pca <- ggplot(pcaData, aes(PC1, PC2, color=Subtype, shape=PlatinumSensitivity, label=CellLine)) +
+  geom_point(size=3) +
+  geom_text(hjust=0, vjust=0) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) +
+  coord_fixed() +
+  theme_classic() + 
+  colScale
+pca
+path = paste0(deseq_output_folder,
+              "/pca_HGSC.pdf")
+ggsave(path, pca)
+```
+PCA plot groups samples roughly by subtype
+
+<!-- ### Sample-wise correlation -->
+
+<!-- ```{r, fig.height=4, fig.width= 8} -->
+<!-- vsd.mod = vsd.df -->
+<!-- colnames(vsd.mod) <- metadata$CellLine[match(colnames(vsd.mod), metadata$files)] -->
+<!-- vsd.mod$gene <- row.names(vsd.mod) -->
+<!-- vsd.mod <- vsd.mod[!is.na(names(vsd.mod))] -->
+
+
+<!-- corr <- vsd.mod %>% -->
+<!--   select(-gene) %>% -->
+<!--   cor(method = "spearman") -->
+
+<!-- annotation = metadata %>% -->
+<!--   filter(Subtype == "HGSC") -->
+
+<!-- row.names(annotation) = metadata$CellLine[match(row.names(annotation), metadata$files)] -->
+<!-- annotation = annotation[, c("IC50", "PlatinumSensitivity")] -->
+
+<!-- pheatmap(corr, annotation_col=annotation) -->
+<!-- ``` -->
+
+### Plot heatmaps to check sample to sample variability
+Plotting the top 100 most highly expressed genes:
+```{r heatmaps}
+select <- order(rowMeans(counts(dds,normalized=TRUE)),
+                decreasing=TRUE)[1:100]
+df <- as.data.frame(colData(dds)[,c("Subtype", "PlatinumSensitivity")])
+pheatmap(assay(vsd)[select,], cluster_rows=FALSE, show_rownames=FALSE,
+         labels_col=colData(dds)[,c("CellLine")],annotation_col=df)
+```
+
+### Dendrogram based on gene expression
+Pull genes contributing to principal components 1 & 2
+```{r}
+# Not sure what this was for:
+# PCA <- prcomp(TPM.log, scale=TRUE)
+# PCA.mat <- as.data.frame(PCA$x)
+# PCA.PC1filt <- PCA.mat %>% filter(PC1 < quantile(PCA.mat[,"PC1"], .2)[[1]])
+```
+
+
+```{r}
+TPM3 <- TPM2[rowSums(TPM2)>1000, metadata$CellLine]
+counts.sc <- t(TPM3)
+dist <- dist(counts.sc)
+clust <- hclust(dist, method="average")
+dend1 <- as.dendrogram(clust)
+```
+
+```{r, fig.width=10}
+par(mar=c(10,2,1,1))
+my_colors <- ifelse(metadata$PlatinumSensitivity=="sensitive", "red", 
+                    ifelse(metadata$PlatinumSensitivity=="resistant", "blue", 
+                           ifelse(metadata$PlatinumSensitivity=="intermediate", "yellow", "white" )))
+plot(dend1)
+colored_bars(colors = my_colors, dend = dend1, rowLabels = "PlatinumSensitivity")
+```
+
+I tried a lot of different iterations of this (including: various cutoffs for variance of genes, genes contributing most to first and second principal components, more highly expressed genes, TPM vs vst data, clustering methods), but the fundamental problem is that isogenic pairs rarely cluster anywhere near each other, even though the PCA analysis shows this relationship. I don't know that this is a reliable method for determining relatedness/subtyping, unless a robust gene set is developed.(This is from Jessi)
+
+## Data visualization
+
+### Plot Heatmap of top differentially expressed genes
+```{r plot heatmap, fig.height = 8, fig.width = 8}
+vsd.df <-as.data.frame(assay(vsd))
+pheatmap(vsd.df[rownames(res.filtered),], labels_col=colData(dds)[,c("CellLine")],annotation_col=df, color=colorRampPalette(c("white", "red"))(50))
+```
+
+### Heatmap based on TPM
+```{r, fig.height = 8, fig.width = 8}
+pheatmap(TPM.log[rownames(res.filtered),], labels_col=colData(dds)[,c("CellLine")], annotation_col=df, color=colorRampPalette(c("white", "red"))(10))
+```
+
+### Heatmap with mean-centered data
+```{r, fig.height=8, fig.width=8}
+center_scale <- function(x) {
+  scale(x, scale=FALSE)
+}
+vsd.meancenter <- apply(vsd.df, 1, center_scale)
+vsd.meancenter <-t(vsd.meancenter)
+colnames(vsd.meancenter) <- colnames(vsd.df)
+vsd.meancenter <- as.data.frame(vsd.meancenter) 
+color <- colorRampPalette(brewer.pal(11, "PuOr"))(50)
+myBreaks <- c(seq(min(vsd.meancenter[rownames(res.filtered),]), 0, length.out=ceiling(50/2) + 1), 
+              seq(max(vsd.meancenter[rownames(res.filtered),])/50, max(vsd.meancenter[rownames(res.filtered),]), length.out=floor(50/2)))
+pheatmap(vsd.meancenter[rownames(res.filtered),], labels_col=colData(dds)[,c("CellLine")], color=color, border_color = NA, annotation_col = df, breaks=myBreaks)
+```
+
+### Volcano Plots
+```{r, fig.height=5, fig.width=10}
+res.filtered %>% 
+  ggplot(aes(x=log2FoldChange, y=-log10(pvalue), label=rownames(res.filtered))) +
+  geom_point() +
+  theme_minimal() +
+  scale_color_manual(values = c("black", "blue", "red"))+
+  geom_text_repel()
+```
+
+## Gene ontology
+
+### GSEA of genes differentially expressed in resistant and sensitive lines
+
+Perform gene set enrichment analysis using Cluster Profiler. This gives us GO pathways that are significantly regulated based on the log2fold change of expression of individual genes. 
+
+Using a padj Cutoff of 0.15.
+
+```{r}
+gene_list <- res$log2FoldChange
+names(gene_list) <- rownames(res)
+gene_list <- sort(gene_list, decreasing = TRUE)
+
+# Set the seed so our results are reproducible:
+set.seed(2024)
+gsea_res <- gseGO(gene_list, ont = "BP", OrgDb = "org.Hs.eg.db", keyType = "SYMBOL", seed = TRUE, pvalueCutoff = 0.15)
+
+# Format output
+gsea_res_df <- as.data.frame(gsea_res)
+gsea_res_df <- gsea_res_df %>%
+  mutate(original_row_num = row_number())
+gsea_res_df <- gsea_res_df[order(gsea_res_df$NES, decreasing = TRUE),]
+row.names(gsea_res_df) <- gsea_res_df$ID
+```
+
+NES is the normalized enrichment score.
+```{r}
+gsea_res_df_short <- gsea_res_df[c("pvalue", "p.adjust", "NES", "Description")]
+gsea_res_df_short$"core_enrichment_genes" <- gsea_res_df$core_enrichment
+```
+
+Volcano Plot of gene ontology (Average NES & adjusted p value)
+
+```{r Volcano gene ontology}
+as.data.frame(gsea_res_df_short) %>%
+  ggplot(aes(x = NES, y = -log10(p.adjust), label = rownames(gsea_res_df_short))) +
+  geom_point() +
+  theme_minimal() +
+  scale_color_manual(values = c("black", "blue", "red")) +
+  geom_text_repel() +
+  geom_hline(yintercept = 1.301) +
+  geom_vline(xintercept = 1.2) +
+  geom_vline(xintercept = -1.2) +
+  xlim(-10, 10)
+```
+
+#### Upregulated pathways
+
+```{r}
+gsea_res_df_short.up <- subset(gsea_res_df_short, gsea_res_df_short$NES >= 0)
+gsea_res_df_short.up = gsea_res_df_short.up[order(gsea_res_df_short.up$p.adjust), ]
+path = paste0(deseq_output_folder,
+              "/cisplatin_resistant_significantly_upregulated_pathways.csv")
+write.csv(gsea_res_df_short.up, file = path)
+gsea_res_df_short.up
+```
+
+Use Revigo to cluster upregulated pathways with pvalue < 0.15
+
+```{r upreg cluster}
+revigo_input.cellline.up <- gsea_res_df_short.up[gsea_res_df_short.up$p.adjust < 0.15,][c("p.adjust")]
+rownames(revigo_input.cellline.up) <- rownames(gsea_res_df_short.up[gsea_res_df_short.up$p.adjust < 0.15,])
+
+simMatrix <- calculateSimMatrix(rownames(revigo_input.cellline.up),
+  orgdb = "org.Hs.eg.db",
+  ont = "BP",
+  method = "Rel"
+)
+scores <- setNames(-log10(revigo_input.cellline.up$p.adjust), rownames(revigo_input.cellline.up))
+
+if (nrow(revigo_input.cellline.up) > 1) {
+  reducedTerms <- reduceSimMatrix(simMatrix,
+    scores,
+    threshold = 0.7,
+    orgdb = "org.Hs.eg.db"
+  )
+} else {
+  reducedTerms <- data.frame(matrix(ncol = 0, nrow = 0))
+  print("There will be no graphs appearing below this because there were not enough significantly upregulated pathways to meaningfully cluster them")
+}
+
+```
+
+Revigo treemap plot. Terms grouped/colored based on parent. Space is proportional to statistical significance of the GO term (-log10(pvalue)).
+
+```{r upreg cluster treemap}
+if (nrow(reducedTerms) > 2) {
+  treemapPlot(reducedTerms)
+}
+```
+
+Use Revigo to cluster upregulated pathways with pvalue < 0.05
+
+```{r upreg cluster lower p}
+revigo_input.cellline.up <- gsea_res_df_short.up[gsea_res_df_short.up$p.adjust < 0.05,][c("p.adjust")]
+rownames(revigo_input.cellline.up) <- rownames(gsea_res_df_short.up[gsea_res_df_short.up$p.adjust < 0.05,])
+
+simMatrix <- calculateSimMatrix(rownames(revigo_input.cellline.up),
+  orgdb = "org.Hs.eg.db",
+  ont = "BP",
+  method = "Rel"
+)
+scores <- setNames(-log10(revigo_input.cellline.up$p.adjust), rownames(revigo_input.cellline.up))
+
+if (nrow(revigo_input.cellline.up) > 1) {
+  reducedTerms <- reduceSimMatrix(simMatrix,
+    scores,
+    threshold = 0.7,
+    orgdb = "org.Hs.eg.db"
+  )
+} else {
+  reducedTerms <- data.frame(matrix(ncol = 0, nrow = 0))
+  print("There will be no graphs appearing below this because there were not enough significantly upregulated pathways to meaningfully cluster them")
+}
+
+```
+
+Revigo treemap plot. Terms grouped/colored based on parent. Space is proportional to statistical significance of the GO term (-log10(pvalue)).
+
+```{r upreg cluster treemap low p}
+if (nrow(reducedTerms) > 2) {
+  treemapPlot(reducedTerms)
+}
+```
+
+#### Downregulated pathways
+
+```{r}
+gsea_res_df_short.down <- subset(gsea_res_df_short, gsea_res_df_short$NES <= 0)
+path = paste0(deseq_output_folder,
+              "/cisplatin_resistant_significantly_downregulated_pathways.csv")
+write.csv(gsea_res_df_short.down, file = path)
+gsea_res_df_short.down
+```
+
+Use Revigo to cluster downregulated pathways with pvalue < 0.15
+
+```{r downreg cluster}
+revigo_input.cellline.down <- gsea_res_df_short.down[gsea_res_df_short.down$p.adjust < 0.15,][c("p.adjust")]
+rownames(revigo_input.cellline.down) <- rownames(gsea_res_df_short.down[gsea_res_df_short.down$p.adjust < 0.15,])
+
+simMatrix <- calculateSimMatrix(rownames(revigo_input.cellline.down),
+  orgdb = "org.Hs.eg.db",
+  ont = "BP",
+  method = "Rel"
+)
+scores <- setNames(-log10(revigo_input.cellline.down$p.adjust), rownames(revigo_input.cellline.down))
+
+if (nrow(revigo_input.cellline.down) > 1) {
+  reducedTerms <- reduceSimMatrix(simMatrix,
+    scores,
+    threshold = 0.7,
+    orgdb = "org.Hs.eg.db"
+  )
+} else {
+  reducedTerms <- data.frame(matrix(ncol = 0, nrow = 0))
+  print("There will be no graphs appearing below this because there were not enough significantly upregulated pathways to meaningfully cluster them")
+}
+
+```
+
+Revigo treemap plot. Terms grouped/colored based on parent. Space is proportional to statistical significance of the GO term (-log10(pvalue)).
+
+```{r downreg cluster treemap}
+if (nrow(reducedTerms) > 2) {
+  treemapPlot(reducedTerms)
+}
+```
+  

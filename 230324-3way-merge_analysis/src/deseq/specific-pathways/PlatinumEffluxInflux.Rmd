@@ -1,0 +1,191 @@
+---
+title: "Secondary analysis of 230324-3way-merge RNA-seq sensitive vs resistant cell lines in isolines PEO, PEA, OVCAR3, OVCAR4"
+output: html_notebook
+---
+
+## Introduction  
+
+Goal: to see which, if any, of the isogenic lines show highly differential activity in the Platinum Efflux/Influx genes when considering resistant and non-resistant cell-lines.
+
+RNA-seq was run for three isogenic tumor cell lines (PEO1, PEO4, and PEO6)
+Sample preparation was performed in Dr. Lang's lab. Preparation of cells and RNA extraction was done by Kendra, Josie, and Sydney.
+RNA seq library prep was done by Kristen.
+
+Data on platinum genes from https://www.nature.com/articles/s41388-021-02055-2#Sec39
+
+
+## Inputs
+
+Inputs consisted of:  
+
+ * Up and downregulated gene lists
+ * Metadata table
+
+```{r load packages, include=FALSE}
+library(tidyverse)
+library(readxl)
+library(DESeq2)
+library(vsn)
+library(pheatmap)
+library(RColorBrewer)
+library(ggrepel)
+library(biomaRt)
+library(DESeqAnalysis)
+library(UpSetR)
+library(gprofiler2)
+library(rrvgo)
+library(GO.db)
+library(ggplot2)
+GO <- as.list(GOTERM)
+```
+
+
+## Read in the gene lists and compare to the platinum efflux/influx gene list
+
+Code hidden for brevity
+
+```{r}
+platinumGeneData <- as.data.frame(read.csv("deseq/specific-pathways/platinumGeneData.csv", sep = ",", header = TRUE))
+row.names(platinumGeneData) <- platinumGeneData[,1]
+platinumGeneData$score <- as.character(platinumGeneData$score)
+
+platinumGeneData
+```
+
+```{r read in gene lists}
+
+read_gene_expression_data <- function(experimentalCellLine, controlCellLine) {
+  # Read in the gene expression data
+  all.upregulated.genes <- as.data.frame(read.csv(str_interp("deseq/output/${experimentalCellLine}_vs_${controlCellLine}_all_upregulated_genes.csv"), sep = ",", header = TRUE))
+  all.downregulated.genes <- as.data.frame(read.csv(str_interp("deseq/output/${experimentalCellLine}_vs_${controlCellLine}_all_downregulated_genes.csv"), sep = ",", header = TRUE))
+  all.regulated.genes <- rbind(all.upregulated.genes, all.downregulated.genes)
+  
+  # Format the gene expression data
+  row.names(all.regulated.genes) <- all.regulated.genes[,1]
+  colnames(all.regulated.genes)[1] <- "gene"
+  
+  # Pull out the platinum related genes
+  platinum.regulated.genes <- all.regulated.genes[all.regulated.genes[,1] %in% platinumGeneData$gene,]
+  
+  # Mark whether the gene was regulated in the direction of resistance
+  platinum.regulated.genes <- platinum.regulated.genes %>%
+    mutate(inResistanceDirection = case_when(log2FoldChange < 0 & platinumGeneData[gene, "resistanceDirection"] == "DOWN" ~ TRUE,
+                                             log2FoldChange > 0 & platinumGeneData[gene, "resistanceDirection"] == "UP" ~ TRUE,
+                                             log2FoldChange < 0 & platinumGeneData[gene, "resistanceDirection"] == "UP" ~ FALSE,
+                                             log2FoldChange > 0 & platinumGeneData[gene, "resistanceDirection"] == "DOWN" ~ FALSE,
+                                             TRUE ~ NA))
+  
+  # Add the score
+  platinum.regulated.genes <- platinum.regulated.genes %>%
+    mutate(score = platinumGeneData[gene, "score"])
+}
+```
+
+```{r}
+platinum.regulated.genes.PEO4 <- read_gene_expression_data("PEO4", "PEO1")
+platinum.regulated.genes.PEO6 <- read_gene_expression_data("PEO6", "PEO1")
+platinum.regulated.genes.PEA2 <- read_gene_expression_data("PEA2", "PEA1")
+platinum.regulated.genes.OVCAR3A <- read_gene_expression_data("OVCAR3A", "OVCAR3")
+platinum.regulated.genes.OVCAR3B <- read_gene_expression_data("OVCAR3B", "OVCAR3")
+platinum.regulated.genes.OVCAR4A <- read_gene_expression_data("OVCAR4A", "OVCAR4")
+platinum.regulated.genes.OVCAR4B <- read_gene_expression_data("OVCAR4B", "OVCAR4")
+```
+
+
+## Volcano plots
+
+These plots show the -log10padj value as the y-axis and the log2fold change as the x-axis. Each plot corresponds to one gene, showing how much it was up or downregulated in the experimental cell line as compared to its control. The only genes under consideration are those that are important in platinum efflux/influx. The data points that are green were regulated in the direction conferring resistance. The data points in red were regulated in the direction opposing resistance. The data points in grey refer to genes for which it's unclear whether up or down regulation confers resistance.
+
+```{r include=FALSE}
+volcano_platinum <- function(platinum.regulated.genes, experimentalCellLine, controlCellLine) {
+  as.data.frame(platinum.regulated.genes) %>%
+    ggplot(aes(x = log2FoldChange,
+               y = -log10(padj),
+               fill = inResistanceDirection,
+               size = score,
+               label = platinum.regulated.genes[,1])) +
+    # Must specify shape and colour as fixed local parameters in order to override
+    geom_point(shape = 21,
+               colour = "black") + 
+    geom_text_repel() +
+    
+    scale_fill_manual(values = c("TRUE" = "green", "FALSE" = "red", "NA" = "gray")) +
+    scale_size_manual(values = c("1" = 2, "2" = 2.5, "3" = 3, "4" = 3.5, "5" = 4)) +
+    geom_hline(yintercept = 1.301) +
+    geom_vline(xintercept = 1.2) +
+    geom_vline(xintercept = -1.2) +
+    xlim(-10, 10) +
+    ggtitle(str_interp("${experimentalCellLine} (vs ${controlCellLine})")) +
+    theme_classic()
+}
+```
+
+```{r plot gene volcano}
+volcano_platinum(platinum.regulated.genes.PEO4, "PEO4", "PEO1")
+volcano_platinum(platinum.regulated.genes.PEO6, "PEO6", "PEO1")
+volcano_platinum(platinum.regulated.genes.PEA2, "PEA2", "PEA1")
+volcano_platinum(platinum.regulated.genes.OVCAR3A, "OVCAR3A", "OVCAR3")
+volcano_platinum(platinum.regulated.genes.OVCAR3B, "OVCAR3B", "OVCAR3")
+volcano_platinum(platinum.regulated.genes.OVCAR4A, "OVCAR4A", "OVCAR4")
+volcano_platinum(platinum.regulated.genes.OVCAR4B, "OVCAR4B", "OVCAR4")
+```
+
+<!-- ## Plot bar graphs of platinum regulated genes -->
+
+<!-- These plots show the number of genes that were significantly/insignificantly up/down regulated. Each plot corresponds to one gene, showing how much it was up or downregulated in the experimental cell line as compared to its control. The only genes under consideration are those that are important in platinum efflux/influx. -->
+
+<!-- ```{r include=FALSE} -->
+<!-- barplot_platinum <- function(all.upregulated.influx, all.upregulated.efflux, all.downregulated.influx, all.downregulated.efflux, experimentalCellLine, controlCellLine) { -->
+
+<!--   # Combine up and down regulation as well as influx and efflux (tagging them to keep separate) -->
+<!--   all.regulated.influx <- rbind(all.upregulated.influx, all.downregulated.influx) -->
+<!--   all.regulated.influx$direction <- "influx" -->
+<!--   all.regulated.efflux <- rbind(all.upregulated.efflux, all.downregulated.efflux) -->
+<!--   all.regulated.efflux$direction <- "efflux" -->
+<!--   all.regulated <- rbind(all.regulated.efflux, all.regulated.influx) -->
+<!--   all.regulated$padj <- replace(all.regulated$padj, is.na(all.regulated$padj), 1) -->
+
+<!--   x <- c("Efflux Up", "Sig Up", "Insig Down", "Sig Down") -->
+<!--   barplotData <- data.frame(numGenes = c( -->
+<!--           # Efflux Up -->
+<!--           nrow(all.regulated.efflux[all.regulated.efflux$padj < 0.05 & all.regulated.efflux$log2FoldChange > 0, ]), -->
+<!--           nrow(all.regulated.efflux[all.regulated.efflux$padj >= 0.05 & all.regulated.efflux$log2FoldChange > 0, ]), -->
+<!--           # Efflux Down -->
+<!--           -1 * nrow(all.regulated.efflux[all.regulated.efflux$padj < 0.05 & all.regulated.efflux$log2FoldChange < 0, ]), -->
+<!--           -1 * nrow(all.regulated.efflux[all.regulated.efflux$padj >= 0.05 & all.regulated.efflux$log2FoldChange < 0, ]), -->
+<!--           # Influx Up -->
+<!--           -1 * nrow(all.regulated.influx[all.regulated.influx$padj < 0.05 & all.regulated.influx$log2FoldChange > 0, ]), -->
+<!--           -1 * nrow(all.regulated.influx[all.regulated.influx$padj >= 0.05 & all.regulated.influx$log2FoldChange > 0, ]), -->
+<!--           # Influx Down -->
+<!--           -1 * nrow(all.regulated.influx[all.regulated.influx$padj < 0.05 & all.regulated.influx$log2FoldChange < 0, ]), -->
+<!--           -1 * nrow(all.regulated.influx[all.regulated.influx$padj >= 0.05 & all.regulated.influx$log2FoldChange < 0, ]) -->
+<!--          )) -->
+
+<!--   barplotData$significance <- c("Significant", "Not Significant", "Significant", "Not Significant", "Significant", "Not Significant", "Significant", "Not Significant") -->
+<!--   barplotData$direction <- c("Efflux upreg", "Efflux upreg", "Efflux downreg", "Efflux downreg", "Influx upreg", "Influx upreg", "Influx downreg", "Influx downreg") -->
+<!--   row.names(barplotData) <- c("effluxUpSig", "effluxUpInsig", "effluxDownSig", "effluxDownInsig", "influxUpSig", "influxUpInsig", "influxDownSig", "influxDownInsig") -->
+
+
+<!--   ggplot(barplotData, aes(fill = significance, -->
+<!--                             y = numGenes, -->
+<!--                             x = direction)) +  -->
+<!--     geom_bar(position = 'stack', stat = 'identity', colour = "black") + -->
+<!--     scale_fill_manual(values = significance <- c("Significant" = "blue", "Not significant" = "gray")) -->
+
+<!-- } -->
+<!-- ``` -->
+
+<!-- ```{r plot gene lists} -->
+<!-- barplot_platinum(plat.influx.all.up.PEO4, plat.efflux.all.up.PEO4, plat.influx.all.down.PEO4, plat.efflux.all.down.PEO4, "PEO4", "PEO1") -->
+<!-- barplot_platinum(plat.influx.all.up.PEO6, plat.efflux.all.up.PEO6, plat.influx.all.down.PEO6, plat.efflux.all.down.PEO6, "PEO6", "PEO1") -->
+<!-- barplot_platinum(plat.influx.all.up.PEA2, plat.efflux.all.up.PEA2, plat.influx.all.down.PEA2, plat.efflux.all.down.PEA2, "PEA2", "PEA1") -->
+<!-- barplot_platinum(plat.influx.all.up.OVCAR3A, plat.efflux.all.up.OVCAR3A, plat.influx.all.down.OVCAR3A, plat.efflux.all.down.OVCAR3A, "OVCAR3A", "OVCAR3") -->
+<!-- barplot_platinum(plat.influx.all.up.OVCAR3B, plat.efflux.all.up.OVCAR3B, plat.influx.all.down.OVCAR3B, plat.efflux.all.down.OVCAR3B, "OVCAR3B", "OVCAR3") -->
+<!-- barplot_platinum(plat.influx.all.up.OVCAR4A, plat.efflux.all.up.OVCAR4A, plat.influx.all.down.OVCAR4A, plat.efflux.all.down.OVCAR4A, "OVCAR4A", "OVCAR4") -->
+<!-- barplot_platinum(plat.influx.all.up.OVCAR4B, plat.efflux.all.up.OVCAR4B, plat.influx.all.down.OVCAR4B, plat.efflux.all.down.OVCAR4B, "OVCAR4B", "OVCAR4") -->
+<!-- ``` -->
+
+
+
+
+

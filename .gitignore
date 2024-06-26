@@ -1,0 +1,10 @@
+
+# Ignore data files, only keep source code
+220829_VL00320_AAC7WHVM5_AAC5JYKM5_AAC5K32M5_analysis/data
+230324-3way-merge_analysis/src/deseq/output
+230324-3way-merge_analysis/src/deseq/RData
+230324-3way-merge_analysis/src/deseq/specific-pathways/plots
+230324-3way-merge_analysis/src/deseq/specific-pathways/temp
+230324-3way-merge_analysis/src/magic/data
+230324-3way-merge_analysis/src/magic/differential_tfs
+230324-3way-merge_analysis/src/magic/gene_clusters

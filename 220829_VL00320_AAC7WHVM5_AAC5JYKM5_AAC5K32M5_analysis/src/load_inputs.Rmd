@@ -1,0 +1,113 @@
+## Inputs
+
+Inputs consisted of:  
+
+* Metadata spreadsheet  
+* salmon.merged.gene_counts.tsv file from nf-core/rnaseq pipeline output  
+* Necessary packages  
+
+```{r load packages, include=FALSE}
+library(tidyverse)
+library(readxl)
+library(openxlsx)
+library(DESeq2)
+library(vsn)
+library(pheatmap)
+library(RColorBrewer)
+library(ggrepel)
+library(dendextend)
+library(NMF)
+library(GO.db)
+library(clusterProfiler)
+library(rrvgo)
+GO <- as.list(GOTERM)
+library(enrichplot)
+library(plotly)
+library(caTools)
+library(class)
+library(biomaRt)
+library(gprofiler2)
+```
+
+### File organization
+
+```{r}
+rnaseq_output_folder = "data/rnaseq_output"
+depmap_data_folder = "data/depmap_data"
+tcga_data_folder = "data/tcga_data"
+
+deseq_Rdata_folder = "data/deseq/Rdata"
+deseq_output_folder = "data/deseq/output"
+deseq_metadata_folder = "src/deseq/metadata"
+
+nmf_Rdata_folder = "data/nmf/Rdata"
+nmf_hgsc_output_folder = "data/nmf/output/hgsc"
+nmf_full_output_folder = "data/nmf/output/full_dataset"
+
+known_pathways_folder = "src/known_pathways"
+# local_file_to_wd = "../../"
+```
+
+To determine genes differentially expressed between cisplatin sensitive and resistant cell lines, we used the median cisplatin IC50 of all 36 cell lines as a cut-point, and excluded cell lines within +/- one standard deviation of the median. These were defined in the metadata table.
+
+### Read in metadata table
+
+Full data set
+
+```{r load metatable-full}
+as.data.frame(read_excel(paste0(deseq_metadata_folder, "/Metadata_full.xlsx"))) -> metadata.full
+row.names(metadata.full) <- metadata.full$files
+metadata.full$CellLine = as.factor(metadata.full$CellLine)
+metadata.full$PlatinumSensitivity = as.factor(metadata.full$PlatinumSensitivity)
+head(metadata.full)
+
+metadata.full.noniso = metadata.full[!(metadata.full$CellLine %in% c("PEO4", "PEO6", "PEA1", "TYK-nu")),]
+```
+
+HGSC only
+
+```{r load metatable}
+as.data.frame(read_excel(paste0(deseq_metadata_folder, "/Metadata_HGSC.xlsx"))) -> metadata
+row.names(metadata) <- metadata$files
+metadata$CellLine = as.factor(metadata$CellLine)
+metadata$PlatinumSensitivity = as.factor(metadata$PlatinumSensitivity)
+head(metadata)
+```
+
+### Load count matrix
+
+```{r read count matrix}
+path = paste0(rnaseq_output_folder,
+              "/star_salmon/salmon.merged.gene_counts.tsv")
+countmatrix <- as.matrix(read.delim(path, sep="\t", row.names="gene_id"))
+countmatrix <- countmatrix[,-1]
+countmatrix2 <- matrix(as.numeric(countmatrix), ncol = ncol(countmatrix), dimnames = list(rownames(countmatrix), colnames(countmatrix)))
+countmatrix2 <- round(countmatrix2)
+
+# Full dataset
+countmatrix2.full = countmatrix2[,rownames(metadata.full)]
+
+# HGSC only
+countmatrix2 <- countmatrix2[,rownames(metadata)]
+head(countmatrix2)
+```
+### Load TPM data
+
+```{r}
+path = paste0(rnaseq_output_folder,
+              "/star_salmon/salmon.merged.gene_tpm.tsv")
+TPM <- as.matrix(read.delim(path, sep="\t", row.names="gene_id"))
+TPM <- TPM[,-1]
+TPM <- matrix(as.numeric(TPM), ncol = ncol(TPM), dimnames = list(rownames(TPM), colnames(TPM)))
+TPM <- round(TPM)
+TPM.log <- log(TPM+1)
+TPM2 <- TPM
+colnames(TPM2) <- metadata.full$CellLine[match(colnames(TPM2), metadata.full$files)]
+
+# Full dataset
+TPM.log.full =TPM.log[,rownames(metadata.full)]
+
+# HGSC only
+TPM.log <- TPM.log[,rownames(metadata)]
+head(TPM.log)
+```

@@ -1,0 +1,193 @@
+---
+title: "Secondary analysis of 230324-3way-merge RNA-seq sensitive vs resistant cell lines in isolines PEO, PEA, OVCAR3, OVCAR4"
+output: html_notebook
+---
+
+## Introduction  
+
+Goal: to see which, if any, of the isogenic lines show highly differential activity in the stemness genes when considering resistant and non-resistant cell-lines.
+
+RNA-seq was run for three isogenic tumor cell lines (PEO1, PEO4, and PEO6)
+Sample preparation was performed in Dr. Lang's lab. Preparation of cells and RNA extraction was done by Kendra, Josie, and Sydney.
+RNA seq library prep was done by Kristen.
+
+
+## Inputs
+
+Inputs consisted of:  
+
+ * Up and downregulated gene lists
+ * Metadata table
+
+```{r load packages, include=FALSE}
+library(tidyverse)
+library(readxl)
+library(DESeq2)
+library(vsn)
+library(pheatmap)
+library(RColorBrewer)
+library(ggrepel)
+library(biomaRt)
+library(DESeqAnalysis)
+library(UpSetR)
+library(gprofiler2)
+library(rrvgo)
+library(GO.db)
+GO <- as.list(GOTERM)
+```
+
+
+## Read in the gene lists and compare to the stemness gene list
+
+Code hidden for brevity
+
+```{r read in gene lists, include = FALSE}
+stemnessGeneList <- readLines("deseq/specific-pathways/stemnessGeneList.txt")
+
+# PEO4
+all.upregulated.genes.PEO4 <- as.data.frame(read.csv("deseq/output/PEO4_vs_PEO1_all_upregulated_genes.csv", sep = ",", header = TRUE))
+all.downregulated.genes.PEO4 <- as.data.frame(read.csv("deseq/output/PEO4_vs_PEO1_all_downregulated_genes.csv", sep = ",", header = TRUE))
+sig.upregulated.genes.PEO4 <- as.data.frame(read.csv("deseq/output/PEO4_vs_PEO1_significantly_upregulated_genes.csv", sep = ",", header = TRUE))
+sig.downregulated.genes.PEO4 <- as.data.frame(read.csv("deseq/output/PEO4_vs_PEO1_significantly_downregulated_genes.csv", sep = ",", header = TRUE))
+
+plat.all.up.PEO4 <- all.upregulated.genes.PEO4[all.upregulated.genes.PEO4[,1] %in% stemnessGeneList,]
+plat.all.down.PEO4 <- all.downregulated.genes.PEO4[all.downregulated.genes.PEO4[,1] %in% stemnessGeneList,]
+plat.sig.up.PEO4 <- sig.upregulated.genes.PEO4[sig.upregulated.genes.PEO4[,1] %in% stemnessGeneList,]
+plat.sig.down.PEO4 <- sig.downregulated.genes.PEO4[sig.downregulated.genes.PEO4[,1] %in% stemnessGeneList,]
+
+# PEO6
+all.upregulated.genes.PEO6 <- as.data.frame(read.csv("deseq/output/PEO6_vs_PEO1_all_upregulated_genes.csv", sep = ",", header = TRUE))
+all.downregulated.genes.PEO6 <- as.data.frame(read.csv("deseq/output/PEO6_vs_PEO1_all_downregulated_genes.csv", sep = ",", header = TRUE))
+sig.upregulated.genes.PEO6 <- as.data.frame(read.csv("deseq/output/PEO6_vs_PEO1_significantly_upregulated_genes.csv", sep = ",", header = TRUE))
+sig.downregulated.genes.PEO6 <- as.data.frame(read.csv("deseq/output/PEO6_vs_PEO1_significantly_downregulated_genes.csv", sep = ",", header = TRUE))
+
+plat.all.up.PEO6 <- all.upregulated.genes.PEO6[all.upregulated.genes.PEO6[,1] %in% stemnessGeneList,]
+plat.all.down.PEO6 <- all.downregulated.genes.PEO6[all.downregulated.genes.PEO6[,1] %in% stemnessGeneList,]
+plat.sig.up.PEO6 <- sig.upregulated.genes.PEO6[sig.upregulated.genes.PEO6[,1] %in% stemnessGeneList,]
+plat.sig.down.PEO6 <- sig.downregulated.genes.PEO6[sig.downregulated.genes.PEO6[,1] %in% stemnessGeneList,]
+
+# PEA2
+all.upregulated.genes.PEA2 <- as.data.frame(read.csv("deseq/output/PEA2_vs_PEA1_all_upregulated_genes.csv", sep = ",", header = TRUE))
+all.downregulated.genes.PEA2 <- as.data.frame(read.csv("deseq/output/PEA2_vs_PEA1_all_downregulated_genes.csv", sep = ",", header = TRUE))
+sig.upregulated.genes.PEA2 <- as.data.frame(read.csv("deseq/output/PEA2_vs_PEA1_significantly_upregulated_genes.csv", sep = ",", header = TRUE))
+sig.downregulated.genes.PEA2 <- as.data.frame(read.csv("deseq/output/PEA2_vs_PEA1_significantly_downregulated_genes.csv", sep = ",", header = TRUE))
+
+plat.all.up.PEA2 <- all.upregulated.genes.PEA2[all.upregulated.genes.PEA2[,1] %in% stemnessGeneList,]
+plat.all.down.PEA2 <- all.downregulated.genes.PEA2[all.downregulated.genes.PEA2[,1] %in% stemnessGeneList,]
+plat.sig.up.PEA2 <- sig.upregulated.genes.PEA2[sig.upregulated.genes.PEA2[,1] %in% stemnessGeneList,]
+plat.sig.down.PEA2 <- sig.downregulated.genes.PEA2[sig.downregulated.genes.PEA2[,1] %in% stemnessGeneList,]
+
+# OVCAR3A
+all.upregulated.genes.OVCAR3A <- as.data.frame(read.csv("deseq/output/OVCAR3A_vs_OVCAR3_all_upregulated_genes.csv", sep = ",", header = TRUE))
+all.downregulated.genes.OVCAR3A <- as.data.frame(read.csv("deseq/output/OVCAR3A_vs_OVCAR3_all_downregulated_genes.csv", sep = ",", header = TRUE))
+sig.upregulated.genes.OVCAR3A <- as.data.frame(read.csv("deseq/output/OVCAR3A_vs_OVCAR3_significantly_upregulated_genes.csv", sep = ",", header = TRUE))
+sig.downregulated.genes.OVCAR3A <- as.data.frame(read.csv("deseq/output/OVCAR3A_vs_OVCAR3_significantly_downregulated_genes.csv", sep = ",", header = TRUE))
+
+plat.all.up.OVCAR3A <- all.upregulated.genes.OVCAR3A[all.upregulated.genes.OVCAR3A[,1] %in% stemnessGeneList,]
+plat.all.down.OVCAR3A <- all.downregulated.genes.OVCAR3A[all.downregulated.genes.OVCAR3A[,1] %in% stemnessGeneList,]
+plat.sig.up.OVCAR3A <- sig.upregulated.genes.OVCAR3A[sig.upregulated.genes.OVCAR3A[,1] %in% stemnessGeneList,]
+plat.sig.down.OVCAR3A <- sig.downregulated.genes.OVCAR3A[sig.downregulated.genes.OVCAR3A[,1] %in% stemnessGeneList,]
+
+# OVCAR3B
+all.upregulated.genes.OVCAR3B <- as.data.frame(read.csv("deseq/output/OVCAR3B_vs_OVCAR3_all_upregulated_genes.csv", sep = ",", header = TRUE))
+all.downregulated.genes.OVCAR3B <- as.data.frame(read.csv("deseq/output/OVCAR3B_vs_OVCAR3_all_downregulated_genes.csv", sep = ",", header = TRUE))
+sig.upregulated.genes.OVCAR3B <- as.data.frame(read.csv("deseq/output/OVCAR3B_vs_OVCAR3_significantly_upregulated_genes.csv", sep = ",", header = TRUE))
+sig.downregulated.genes.OVCAR3B <- as.data.frame(read.csv("deseq/output/OVCAR3B_vs_OVCAR3_significantly_downregulated_genes.csv", sep = ",", header = TRUE))
+
+plat.all.up.OVCAR3B <- all.upregulated.genes.OVCAR3B[all.upregulated.genes.OVCAR3B[,1] %in% stemnessGeneList,]
+plat.all.down.OVCAR3B <- all.downregulated.genes.OVCAR3B[all.downregulated.genes.OVCAR3B[,1] %in% stemnessGeneList,]
+plat.sig.up.OVCAR3B <- sig.upregulated.genes.OVCAR3B[sig.upregulated.genes.OVCAR3B[,1] %in% stemnessGeneList,]
+plat.sig.down.OVCAR3B <- sig.downregulated.genes.OVCAR3B[sig.downregulated.genes.OVCAR3B[,1] %in% stemnessGeneList,]
+
+# OVCAR3A
+all.upregulated.genes.OVCAR3A <- as.data.frame(read.csv("deseq/output/OVCAR3A_vs_OVCAR3_all_upregulated_genes.csv", sep = ",", header = TRUE))
+all.downregulated.genes.OVCAR3A <- as.data.frame(read.csv("deseq/output/OVCAR3A_vs_OVCAR3_all_downregulated_genes.csv", sep = ",", header = TRUE))
+sig.upregulated.genes.OVCAR3A <- as.data.frame(read.csv("deseq/output/OVCAR3A_vs_OVCAR3_significantly_upregulated_genes.csv", sep = ",", header = TRUE))
+sig.downregulated.genes.OVCAR3A <- as.data.frame(read.csv("deseq/output/OVCAR3A_vs_OVCAR3_significantly_downregulated_genes.csv", sep = ",", header = TRUE))
+
+plat.all.up.OVCAR3A <- all.upregulated.genes.OVCAR3A[all.upregulated.genes.OVCAR3A[,1] %in% stemnessGeneList,]
+plat.all.down.OVCAR3A <- all.downregulated.genes.OVCAR3A[all.downregulated.genes.OVCAR3A[,1] %in% stemnessGeneList,]
+plat.sig.up.OVCAR3A <- sig.upregulated.genes.OVCAR3A[sig.upregulated.genes.OVCAR3A[,1] %in% stemnessGeneList,]
+plat.sig.down.OVCAR3A <- sig.downregulated.genes.OVCAR3A[sig.downregulated.genes.OVCAR3A[,1] %in% stemnessGeneList,]
+
+# OVCAR4A
+all.upregulated.genes.OVCAR4A <- as.data.frame(read.csv("deseq/output/OVCAR4A_vs_OVCAR4_all_upregulated_genes.csv", sep = ",", header = TRUE))
+all.downregulated.genes.OVCAR4A <- as.data.frame(read.csv("deseq/output/OVCAR4A_vs_OVCAR4_all_downregulated_genes.csv", sep = ",", header = TRUE))
+sig.upregulated.genes.OVCAR4A <- as.data.frame(read.csv("deseq/output/OVCAR4A_vs_OVCAR4_significantly_upregulated_genes.csv", sep = ",", header = TRUE))
+sig.downregulated.genes.OVCAR4A <- as.data.frame(read.csv("deseq/output/OVCAR4A_vs_OVCAR4_significantly_downregulated_genes.csv", sep = ",", header = TRUE))
+
+plat.all.up.OVCAR4A <- all.upregulated.genes.OVCAR4A[all.upregulated.genes.OVCAR4A[,1] %in% stemnessGeneList,]
+plat.all.down.OVCAR4A <- all.downregulated.genes.OVCAR4A[all.downregulated.genes.OVCAR4A[,1] %in% stemnessGeneList,]
+plat.sig.up.OVCAR4A <- sig.upregulated.genes.OVCAR4A[sig.upregulated.genes.OVCAR4A[,1] %in% stemnessGeneList,]
+plat.sig.down.OVCAR4A <- sig.downregulated.genes.OVCAR4A[sig.downregulated.genes.OVCAR4A[,1] %in% stemnessGeneList,]
+
+# OVCAR4B
+all.upregulated.genes.OVCAR4B <- as.data.frame(read.csv("deseq/output/OVCAR4B_vs_OVCAR4_all_upregulated_genes.csv", sep = ",", header = TRUE))
+all.downregulated.genes.OVCAR4B <- as.data.frame(read.csv("deseq/output/OVCAR4B_vs_OVCAR4_all_downregulated_genes.csv", sep = ",", header = TRUE))
+sig.upregulated.genes.OVCAR4B <- as.data.frame(read.csv("deseq/output/OVCAR4B_vs_OVCAR4_significantly_upregulated_genes.csv", sep = ",", header = TRUE))
+sig.downregulated.genes.OVCAR4B <- as.data.frame(read.csv("deseq/output/OVCAR4B_vs_OVCAR4_significantly_downregulated_genes.csv", sep = ",", header = TRUE))
+
+plat.all.up.OVCAR4B <- all.upregulated.genes.OVCAR4B[all.upregulated.genes.OVCAR4B[,1] %in% stemnessGeneList,]
+plat.all.down.OVCAR4B <- all.downregulated.genes.OVCAR4B[all.downregulated.genes.OVCAR4B[,1] %in% stemnessGeneList,]
+plat.sig.up.OVCAR4B <- sig.upregulated.genes.OVCAR4B[sig.upregulated.genes.OVCAR4B[,1] %in% stemnessGeneList,]
+plat.sig.down.OVCAR4B <- sig.downregulated.genes.OVCAR4B[sig.downregulated.genes.OVCAR4B[,1] %in% stemnessGeneList,]
+```
+
+## Volcano plots
+
+These plots show the -log10padj value as the y-axis and the log2fold change as the x-axis. Each plot corresponds to one gene, showing how much it was up or downregulated in the experimental cell line as compared to its control. The only genes under consideration are those that are important in stemness.
+
+```{r include=FALSE}
+volcano_stemness <- function(all.upregulated, all.downregulated, experimentalCellLine, controlCellLine) {
+all.regulated <- rbind(all.upregulated, all.downregulated)
+as.data.frame(all.regulated) %>%
+  ggplot(aes(x = log2FoldChange, y = -log10(padj), label = all.regulated[,1])) +
+  geom_point() +
+  theme_minimal() +
+  scale_color_manual(values = c("black", "blue", "red")) +
+  geom_text_repel() +
+  geom_hline(yintercept = 1.301) +
+  geom_vline(xintercept = 1.2) +
+  geom_vline(xintercept = -1.2) +
+  xlim(-10, 10) +
+  ggtitle(str_interp("${experimentalCellLine} (vs ${controlCellLine})"))
+}
+```
+
+```{r plot gene volcano}
+volcano_stemness(plat.all.up.PEO4, plat.all.down.PEO4, "PEO4", "PEO1")
+volcano_stemness(plat.all.up.PEO6, plat.all.down.PEO6, "PEO6", "PEO1")
+volcano_stemness(plat.all.up.PEA2, plat.all.down.PEA2, "PEA2", "PEA1")
+volcano_stemness(plat.all.up.OVCAR3A, plat.all.down.OVCAR3A, "OVCAR3A", "OVCAR3")
+volcano_stemness(plat.all.up.OVCAR3B, plat.all.down.OVCAR3B, "OVCAR3B", "OVCAR3")
+volcano_stemness(plat.all.up.OVCAR4A, plat.all.down.OVCAR4A, "OVCAR4A", "OVCAR4")
+volcano_stemness(plat.all.up.OVCAR4A, plat.all.down.OVCAR4A, "OVCAR4B", "OVCAR4")
+```
+
+## Plot bar graphs of stemness regulated genes
+
+These plots show the number of genes that were significantly/insignificantly up/down regulated. Each plot corresponds to one gene, showing how much it was up or downregulated in the experimental cell line as compared to its control. The only genes under consideration are those that are important in stemness efflux/influx.
+
+```{r include=FALSE}
+barplot_stemness <- function(all.upregulated, sig.upregulated, all.downregulated, sig.downregulated, experimentalCellLine, controlCellLine) {
+  x <- c("Insig Up", "Sig Up", "Insig Down", "Sig Down")
+  y <- c(nrow(all.upregulated) - nrow(sig.upregulated), nrow(sig.upregulated), -1 * (nrow(all.downregulated) - nrow(sig.downregulated)), -1 * (nrow(sig.downregulated)))
+
+  barplot(y, names.arg = x, ylab = "Number of genes __ regulated as compared to control", col = c("lightgray", "darkgray", "lightgray", "darkgray"), main = str_interp("${experimentalCellLine} (vs ${controlCellLine})"))
+}
+```
+
+```{r plot gene lists}
+barplot_stemness(plat.all.up.PEO4, plat.sig.up.PEO4, plat.all.down.PEO4, plat.sig.down.PEO4, "PEO4", "PEO1")
+barplot_stemness(plat.all.up.PEO6, plat.sig.up.PEO6, plat.all.down.PEO6, plat.sig.down.PEO6, "PEO6", "PEO1")
+barplot_stemness(plat.all.up.PEA2, plat.sig.up.PEA2, plat.all.down.PEA2, plat.sig.down.PEA2, "PEA2", "PEA1")
+barplot_stemness(plat.all.up.OVCAR3A, plat.sig.up.OVCAR3A, plat.all.down.OVCAR3A, plat.sig.down.OVCAR3A, "OVCAR3A", "OVCAR3")
+barplot_stemness(plat.all.up.OVCAR3B, plat.sig.up.OVCAR3B, plat.all.down.OVCAR3B, plat.sig.down.OVCAR3B, "OVCAR3B", "OVCAR3")
+barplot_stemness(plat.all.up.OVCAR4A, plat.sig.up.OVCAR4A, plat.all.down.OVCAR4A, plat.sig.down.OVCAR4A, "OVCAR4A", "OVCAR4")
+barplot_stemness(plat.all.up.OVCAR4A, plat.sig.up.OVCAR4A, plat.all.down.OVCAR4A, plat.sig.down.OVCAR4A, "OVCAR4B", "OVCAR4")
+```
+
+
+
+
+

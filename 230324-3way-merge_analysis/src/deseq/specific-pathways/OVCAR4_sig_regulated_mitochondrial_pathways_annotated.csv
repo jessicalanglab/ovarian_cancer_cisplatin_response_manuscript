@@ -1,0 +1,302 @@
+,GO_id,Description,Mitochondrial
+GO:0008544,GO:0008544,epidermis development,NA
+GO:0030216,GO:0030216,keratinocyte differentiation,NA
+GO:0043588,GO:0043588,skin development,NA
+GO:0030335,GO:0030335,positive regulation of cell migration,NA
+GO:0045165,GO:0045165,cell fate commitment,NA
+GO:0061564,GO:0061564,axon development,NA
+GO:0001501,GO:0001501,skeletal system development,NA
+GO:0001525,GO:0001525,angiogenesis,NA
+GO:0001654,GO:0001654,eye development,NA
+GO:0003002,GO:0003002,regionalization,NA
+GO:0007369,GO:0007369,gastrulation,NA
+GO:0007389,GO:0007389,pattern specification process,NA
+GO:0007409,GO:0007409,axonogenesis,NA
+GO:0007492,GO:0007492,endoderm development,NA
+GO:0009615,GO:0009615,response to virus,NA
+GO:0009913,GO:0009913,epidermal cell differentiation,NA
+GO:0031424,GO:0031424,keratinization,NA
+GO:0034329,GO:0034329,cell junction assembly,NA
+GO:0042060,GO:0042060,wound healing,NA
+GO:0043010,GO:0043010,camera-type eye development,NA
+GO:0048562,GO:0048562,embryonic organ morphogenesis,NA
+GO:0048565,GO:0048565,digestive tract development,NA
+GO:0048880,GO:0048880,sensory system development,NA
+GO:0050673,GO:0050673,epithelial cell proliferation,NA
+GO:0051607,GO:0051607,defense response to virus,NA
+GO:0061458,GO:0061458,reproductive system development,NA
+GO:0072001,GO:0072001,renal system development,NA
+GO:0090596,GO:0090596,sensory organ morphogenesis,NA
+GO:0140546,GO:0140546,defense response to symbiont,NA
+GO:0150063,GO:0150063,visual system development,NA
+GO:2000147,GO:2000147,positive regulation of cell motility,NA
+GO:0001658,GO:0001658,branching involved in ureteric bud morphogenesis,NA
+GO:0001763,GO:0001763,morphogenesis of a branching structure,NA
+GO:0001822,GO:0001822,kidney development,NA
+GO:0001823,GO:0001823,mesonephros development,NA
+GO:0001894,GO:0001894,tissue homeostasis,NA
+GO:0002009,GO:0002009,morphogenesis of an epithelium,NA
+GO:0002181,GO:0002181,cytoplasmic translation,NA
+GO:0002237,GO:0002237,response to molecule of bacterial origin,NA
+GO:0002683,GO:0002683,negative regulation of immune system process,NA
+GO:0002831,GO:0002831,regulation of response to biotic stimulus,NA
+GO:0006119,GO:0006119,oxidative phosphorylation,Y
+GO:0006120,GO:0006120,"mitochondrial electron transport, NADH to ubiquinone",Y
+GO:0006364,GO:0006364,rRNA processing,NA
+GO:0007159,GO:0007159,leukocyte cell-cell adhesion,NA
+GO:0007173,GO:0007173,epidermal growth factor receptor signaling pathway,NA
+GO:0007423,GO:0007423,sensory organ development,NA
+GO:0008277,GO:0008277,regulation of G protein-coupled receptor signaling pathway,NA
+GO:0009953,GO:0009953,dorsal/ventral pattern formation,NA
+GO:0010257,GO:0010257,NADH dehydrogenase complex assembly,Y
+GO:0010466,GO:0010466,negative regulation of peptidase activity,NA
+GO:0010631,GO:0010631,epithelial cell migration,NA
+GO:0010951,GO:0010951,negative regulation of endopeptidase activity,NA
+GO:0010975,GO:0010975,regulation of neuron projection development,NA
+GO:0015986,GO:0015986,proton motive force-driven ATP synthesis,Y
+GO:0019646,GO:0019646,aerobic electron transport chain,Y
+GO:0021696,GO:0021696,cerebellar cortex morphogenesis,NA
+GO:0022407,GO:0022407,regulation of cell-cell adhesion,NA
+GO:0022409,GO:0022409,positive regulation of cell-cell adhesion,NA
+GO:0022612,GO:0022612,gland morphogenesis,NA
+GO:0022613,GO:0022613,ribonucleoprotein complex biogenesis,NA
+GO:0022904,GO:0022904,respiratory electron transport chain,Y
+GO:0030856,GO:0030856,regulation of epithelial cell differentiation,NA
+GO:0031349,GO:0031349,positive regulation of defense response,NA
+GO:0032102,GO:0032102,negative regulation of response to external stimulus,NA
+GO:0032103,GO:0032103,positive regulation of response to external stimulus,NA
+GO:0032496,GO:0032496,response to lipopolysaccharide,NA
+GO:0032543,GO:0032543,mitochondrial translation,Y
+GO:0032981,GO:0032981,mitochondrial respiratory chain complex I assembly,Y
+GO:0033108,GO:0033108,mitochondrial respiratory chain complex assembly,Y
+GO:0038127,GO:0038127,ERBB signaling pathway,NA
+GO:0040017,GO:0040017,positive regulation of locomotion,NA
+GO:0042110,GO:0042110,T cell activation,NA
+GO:0042254,GO:0042254,ribosome biogenesis,NA
+GO:0042273,GO:0042273,ribosomal large subunit biogenesis,NA
+GO:0042303,GO:0042303,molting cycle,NA
+GO:0042475,GO:0042475,odontogenesis of dentin-containing tooth,NA
+GO:0042633,GO:0042633,hair cycle,NA
+GO:0042773,GO:0042773,ATP synthesis coupled electron transport,Y
+GO:0042775,GO:0042775,mitochondrial ATP synthesis coupled electron transport,Y
+GO:0042776,GO:0042776,proton motive force-driven mitochondrial ATP synthesis,Y
+GO:0045861,GO:0045861,negative regulation of proteolysis,NA
+GO:0048546,GO:0048546,digestive tract morphogenesis,NA
+GO:0048608,GO:0048608,reproductive structure development,NA
+GO:0048705,GO:0048705,skeletal system morphogenesis,NA
+GO:0048754,GO:0048754,branching morphogenesis of an epithelial tube,NA
+GO:0048806,GO:0048806,genitalia development,NA
+GO:0050808,GO:0050808,synapse organization,NA
+GO:0050878,GO:0050878,regulation of body fluid levels,NA
+GO:0050886,GO:0050886,endocrine process,NA
+GO:0050900,GO:0050900,leukocyte migration,NA
+GO:0052547,GO:0052547,regulation of peptidase activity,NA
+GO:0052548,GO:0052548,regulation of endopeptidase activity,NA
+GO:0055123,GO:0055123,digestive system development,NA
+GO:0060249,GO:0060249,anatomical structure homeostasis,NA
+GO:0060443,GO:0060443,mammary gland morphogenesis,NA
+GO:0060560,GO:0060560,developmental growth involved in morphogenesis,NA
+GO:0060562,GO:0060562,epithelial tube morphogenesis,NA
+GO:0060675,GO:0060675,ureteric bud morphogenesis,NA
+GO:0060993,GO:0060993,kidney morphogenesis,NA
+GO:0061138,GO:0061138,morphogenesis of a branching epithelium,NA
+GO:0061333,GO:0061333,renal tubule morphogenesis,NA
+GO:0071346,GO:0071346,cellular response to type II interferon,NA
+GO:0072009,GO:0072009,nephron epithelium development,NA
+GO:0072028,GO:0072028,nephron morphogenesis,NA
+GO:0072078,GO:0072078,nephron tubule morphogenesis,NA
+GO:0072088,GO:0072088,nephron epithelium morphogenesis,NA
+GO:0072163,GO:0072163,mesonephric epithelium development,NA
+GO:0072164,GO:0072164,mesonephric tubule development,NA
+GO:0072171,GO:0072171,mesonephric tubule morphogenesis,NA
+GO:0072202,GO:0072202,cell differentiation involved in metanephros development,NA
+GO:0072283,GO:0072283,metanephric renal vesicle morphogenesis,NA
+GO:0090066,GO:0090066,regulation of anatomical structure size,NA
+GO:0090130,GO:0090130,tissue migration,NA
+GO:0090132,GO:0090132,epithelium migration,NA
+GO:0098773,GO:0098773,skin epidermis development,NA
+GO:0140053,GO:0140053,mitochondrial gene expression,Y
+GO:0001504,GO:0001504,neurotransmitter uptake,NA
+GO:0001655,GO:0001655,urogenital system development,NA
+GO:0001656,GO:0001656,metanephros development,NA
+GO:0001657,GO:0001657,ureteric bud development,NA
+GO:0001818,GO:0001818,negative regulation of cytokine production,NA
+GO:0001819,GO:0001819,positive regulation of cytokine production,NA
+GO:0001991,GO:0001991,regulation of systemic arterial blood pressure by circulatory renin-angiotensin,NA
+GO:0002218,GO:0002218,activation of innate immune response,NA
+GO:0002221,GO:0002221,pattern recognition receptor signaling pathway,NA
+GO:0002224,GO:0002224,toll-like receptor signaling pathway,NA
+GO:0002230,GO:0002230,positive regulation of defense response to virus by host,NA
+GO:0002253,GO:0002253,activation of immune response,NA
+GO:0002443,GO:0002443,leukocyte mediated immunity,NA
+GO:0002449,GO:0002449,lymphocyte mediated immunity,NA
+GO:0002521,GO:0002521,leukocyte differentiation,NA
+GO:0002573,GO:0002573,myeloid leukocyte differentiation,NA
+GO:0002694,GO:0002694,regulation of leukocyte activation,NA
+GO:0002757,GO:0002757,immune response-activating signaling pathway,NA
+GO:0002758,GO:0002758,innate immune response-activating signaling pathway,NA
+GO:0002764,GO:0002764,immune response-regulating signaling pathway,NA
+GO:0002830,GO:0002830,positive regulation of type 2 immune response,NA
+GO:0002832,GO:0002832,negative regulation of response to biotic stimulus,NA
+GO:0002833,GO:0002833,positive regulation of response to biotic stimulus,NA
+GO:0002920,GO:0002920,regulation of humoral immune response,NA
+GO:0003014,GO:0003014,renal system process,NA
+GO:0003073,GO:0003073,regulation of systemic arterial blood pressure,NA
+GO:0003081,GO:0003081,regulation of systemic arterial blood pressure by renin-angiotensin,NA
+GO:0003337,GO:0003337,mesenchymal to epithelial transition involved in metanephros morphogenesis,NA
+GO:0003338,GO:0003338,metanephros morphogenesis,NA
+GO:0006399,GO:0006399,tRNA metabolic process,NA
+GO:0006607,GO:0006607,NLS-bearing protein import into nucleus,NA
+GO:0006816,GO:0006816,calcium ion transport,NA
+GO:0006929,GO:0006929,substrate-dependent cell migration,NA
+GO:0006939,GO:0006939,smooth muscle contraction,NA
+GO:0007015,GO:0007015,actin filament organization,NA
+GO:0007162,GO:0007162,negative regulation of cell adhesion,NA
+GO:0007178,GO:0007178,transmembrane receptor protein serine/threonine kinase signaling pathway,NA
+GO:0007224,GO:0007224,smoothened signaling pathway,NA
+GO:0007292,GO:0007292,female gamete generation,NA
+GO:0007565,GO:0007565,female pregnancy,NA
+GO:0007588,GO:0007588,excretion,NA
+GO:0008015,GO:0008015,blood circulation,NA
+GO:0008217,GO:0008217,regulation of blood pressure,NA
+GO:0009145,GO:0009145,purine nucleoside triphosphate biosynthetic process,NA
+GO:0009201,GO:0009201,ribonucleoside triphosphate biosynthetic process,NA
+GO:0009206,GO:0009206,purine ribonucleoside triphosphate biosynthetic process,NA
+GO:0009410,GO:0009410,response to xenobiotic stimulus,NA
+GO:0009611,GO:0009611,response to wounding,NA
+GO:0009617,GO:0009617,response to bacterium,NA
+GO:0009791,GO:0009791,post-embryonic development,NA
+GO:0010720,GO:0010720,positive regulation of cell development,NA
+GO:0010817,GO:0010817,regulation of hormone levels,NA
+GO:0010976,GO:0010976,positive regulation of neuron projection development,NA
+GO:0010977,GO:0010977,negative regulation of neuron projection development,NA
+GO:0015697,GO:0015697,quaternary ammonium group transport,NA
+GO:0016072,GO:0016072,rRNA metabolic process,NA
+GO:0018149,GO:0018149,peptide cross-linking,NA
+GO:0019221,GO:0019221,cytokine-mediated signaling pathway,NA
+GO:0021575,GO:0021575,hindbrain morphogenesis,NA
+GO:0021819,GO:0021819,layer formation in cerebral cortex,NA
+GO:0022617,GO:0022617,extracellular matrix disassembly,NA
+GO:0022618,GO:0022618,ribonucleoprotein complex assembly,NA
+GO:0022900,GO:0022900,electron transport chain,Y
+GO:0023061,GO:0023061,signal release,NA
+GO:0030198,GO:0030198,extracellular matrix organization,NA
+GO:0030217,GO:0030217,T cell differentiation,NA
+GO:0030323,GO:0030323,respiratory tube development,NA
+GO:0030324,GO:0030324,lung development,NA
+GO:0030509,GO:0030509,BMP signaling pathway,NA
+GO:0030510,GO:0030510,regulation of BMP signaling pathway,NA
+GO:0030539,GO:0030539,male genitalia development,NA
+GO:0030540,GO:0030540,female genitalia development,NA
+GO:0030832,GO:0030832,regulation of actin filament length,NA
+GO:0031346,GO:0031346,positive regulation of cell projection organization,NA
+GO:0031348,GO:0031348,negative regulation of defense response,NA
+GO:0031589,GO:0031589,cell-substrate adhesion,NA
+GO:0032409,GO:0032409,regulation of transporter activity,NA
+GO:0032608,GO:0032608,interferon-beta production,NA
+GO:0032648,GO:0032648,regulation of interferon-beta production,NA
+GO:0032728,GO:0032728,positive regulation of interferon-beta production,NA
+GO:0032835,GO:0032835,glomerulus development,NA
+GO:0032905,GO:0032905,transforming growth factor beta1 production,NA
+GO:0032908,GO:0032908,regulation of transforming growth factor beta1 production,NA
+GO:0032956,GO:0032956,regulation of actin cytoskeleton organization,NA
+GO:0033002,GO:0033002,muscle cell proliferation,NA
+GO:0033077,GO:0033077,T cell differentiation in thymus,NA
+GO:0033674,GO:0033674,positive regulation of kinase activity,NA
+GO:0034341,GO:0034341,response to type II interferon,NA
+GO:0034470,GO:0034470,ncRNA processing,NA
+GO:0034762,GO:0034762,regulation of transmembrane transport,NA
+GO:0035137,GO:0035137,hindlimb morphogenesis,NA
+GO:0038061,GO:0038061,NIK/NF-kappaB signaling,NA
+GO:0042074,GO:0042074,cell migration involved in gastrulation,NA
+GO:0042098,GO:0042098,T cell proliferation,NA
+GO:0042255,GO:0042255,ribosome assembly,NA
+GO:0042274,GO:0042274,ribosomal small subunit biogenesis,NA
+GO:0042471,GO:0042471,ear morphogenesis,NA
+GO:0042476,GO:0042476,odontogenesis,NA
+GO:0042481,GO:0042481,regulation of odontogenesis,NA
+GO:0042487,GO:0042487,regulation of odontogenesis of dentin-containing tooth,NA
+GO:0043062,GO:0043062,extracellular structure organization,NA
+GO:0043583,GO:0043583,ear development,NA
+GO:0044703,GO:0044703,multi-organism reproductive process,NA
+GO:0044706,GO:0044706,multi-multicellular organism process,NA
+GO:0045088,GO:0045088,regulation of innate immune response,NA
+GO:0045089,GO:0045089,positive regulation of innate immune response,NA
+GO:0045229,GO:0045229,external encapsulating structure organization,NA
+GO:0045745,GO:0045745,positive regulation of G protein-coupled receptor signaling pathway,NA
+GO:0045765,GO:0045765,regulation of angiogenesis,NA
+GO:0045785,GO:0045785,positive regulation of cell adhesion,NA
+GO:0045824,GO:0045824,negative regulation of innate immune response,NA
+GO:0046847,GO:0046847,filopodium assembly,NA
+GO:0048286,GO:0048286,lung alveolus development,NA
+GO:0048545,GO:0048545,response to steroid hormone,NA
+GO:0048566,GO:0048566,embryonic digestive tract development,NA
+GO:0048659,GO:0048659,smooth muscle cell proliferation,NA
+GO:0048660,GO:0048660,regulation of smooth muscle cell proliferation,NA
+GO:0050777,GO:0050777,negative regulation of immune response,NA
+GO:0050863,GO:0050863,regulation of T cell activation,NA
+GO:0050870,GO:0050870,positive regulation of T cell activation,NA
+GO:0050891,GO:0050891,multicellular organismal-level water homeostasis,NA
+GO:0051090,GO:0051090,regulation of DNA-binding transcription factor activity,NA
+GO:0051092,GO:0051092,positive regulation of NF-kappaB transcription factor activity,NA
+GO:0051204,GO:0051204,protein insertion into mitochondrial membrane,Y
+GO:0051216,GO:0051216,cartilage development,NA
+GO:0051489,GO:0051489,regulation of filopodium assembly,NA
+GO:0051493,GO:0051493,regulation of cytoskeleton organization,NA
+GO:0060231,GO:0060231,mesenchymal to epithelial transition,NA
+GO:0060348,GO:0060348,bone development,NA
+GO:0060389,GO:0060389,pathway-restricted SMAD protein phosphorylation,NA
+GO:0060393,GO:0060393,regulation of pathway-restricted SMAD protein phosphorylation,NA
+GO:0060394,GO:0060394,negative regulation of pathway-restricted SMAD protein phosphorylation,NA
+GO:0060395,GO:0060395,SMAD protein signal transduction,NA
+GO:0060512,GO:0060512,prostate gland morphogenesis,NA
+GO:0060541,GO:0060541,respiratory system development,NA
+GO:0060740,GO:0060740,prostate gland epithelium morphogenesis,NA
+GO:0061326,GO:0061326,renal tubule development,NA
+GO:0061448,GO:0061448,connective tissue development,NA
+GO:0061614,GO:0061614,miRNA transcription,NA
+GO:0062207,GO:0062207,regulation of pattern recognition receptor signaling pathway,NA
+GO:0071407,GO:0071407,cellular response to organic cyclic compound,NA
+GO:0071599,GO:0071599,otic vesicle development,NA
+GO:0071604,GO:0071604,transforming growth factor beta production,NA
+GO:0071636,GO:0071636,positive regulation of transforming growth factor beta production,NA
+GO:0071706,GO:0071706,tumor necrosis factor superfamily cytokine production,NA
+GO:0071772,GO:0071772,response to BMP,NA
+GO:0071773,GO:0071773,cellular response to BMP stimulus,NA
+GO:0071826,GO:0071826,ribonucleoprotein complex subunit organization,NA
+GO:0072006,GO:0072006,nephron development,NA
+GO:0072073,GO:0072073,kidney epithelium development,NA
+GO:0072077,GO:0072077,renal vesicle morphogenesis,NA
+GO:0072080,GO:0072080,nephron tubule development,NA
+GO:0072087,GO:0072087,renal vesicle development,NA
+GO:0072210,GO:0072210,metanephric nephron development,NA
+GO:0072273,GO:0072273,metanephric nephron morphogenesis,NA
+GO:0090100,GO:0090100,positive regulation of transmembrane receptor protein serine/threonine kinase signaling pathway,NA
+GO:0090151,GO:0090151,establishment of protein localization to mitochondrial membrane,Y
+GO:0090183,GO:0090183,regulation of kidney development,NA
+GO:0090189,GO:0090189,regulation of branching involved in ureteric bud morphogenesis,NA
+GO:0097553,GO:0097553,calcium ion transmembrane import into cytosol,NA
+GO:0098657,GO:0098657,import into cell,NA
+GO:0098742,GO:0098742,cell-cell adhesion via plasma-membrane adhesion molecules,NA
+GO:0098810,GO:0098810,neurotransmitter reuptake,NA
+GO:0140962,GO:0140962,multicellular organismal-level chemical homeostasis,NA
+GO:1900006,GO:1900006,positive regulation of dendrite development,NA
+GO:1900118,GO:1900118,negative regulation of execution phase of apoptosis,NA
+GO:1900272,GO:1900272,negative regulation of long-term synaptic potentiation,NA
+GO:1901224,GO:1901224,positive regulation of NIK/NF-kappaB signaling,NA
+GO:1902074,GO:1902074,response to salt,NA
+GO:1902075,GO:1902075,cellular response to salt,NA
+GO:1902105,GO:1902105,regulation of leukocyte differentiation,NA
+GO:1902893,GO:1902893,regulation of miRNA transcription,NA
+GO:1902894,GO:1902894,negative regulation of miRNA transcription,NA
+GO:1903035,GO:1903035,negative regulation of response to wounding,NA
+GO:1903037,GO:1903037,regulation of leukocyte cell-cell adhesion,NA
+GO:1903039,GO:1903039,positive regulation of leukocyte cell-cell adhesion,NA
+GO:1903053,GO:1903053,regulation of extracellular matrix organization,NA
+GO:1903131,GO:1903131,mononuclear cell differentiation,NA
+GO:1903530,GO:1903530,regulation of secretion by cell,NA
+GO:1903555,GO:1903555,regulation of tumor necrosis factor superfamily cytokine production,NA
+GO:1904667,GO:1904667,negative regulation of ubiquitin protein ligase activity,NA
+GO:1905332,GO:1905332,positive regulation of morphogenesis of an epithelium,NA
+GO:2000027,GO:2000027,regulation of animal organ morphogenesis,NA
+GO:2000629,GO:2000629,negative regulation of miRNA metabolic process,NA

@@ -1,0 +1,1176 @@
+---
+title: "Secondary analysis of 230324-3way-merge RNA-seq sensitive vs resistant cell lines in isolines PEO, PEA, OVCAR3, OVCAR4"
+output: html_notebook
+---
+
+## Introduction  
+
+Goal: to compare the difference in gene expression between sensitive and resistant cell lines of three different lines of tumors.
+
+RNA-seq was run for three isogenic tumor cell lines (PEO1, PEO4, and PEO6)
+Sample preparation was performed in Dr. Lang's lab. Preparation of cells and RNA extraction was done by Kendra, Josie, and Sydney.
+RNA seq library prep was done by Kristen.
+Analysis done by Ryan.
+
+Biological Questions:
+
+ * How does the gene expression differ between these three cell lines?
+ * How does the gene expression differ between sensitive and resistant cell lines
+
+## Inputs
+
+Inputs consisted of:  
+
+ * Metadata spreadsheet for DESeq2
+ * salmon.merged.gene_counts.tsv file from nf-core/rnaseq pipeline output  
+ * salmon.merged.gene_tpm.tsv
+
+```{r load packages, include=FALSE}
+library(tidyverse)
+library(readxl)
+library(DESeq2)
+library(vsn)
+library(pheatmap)
+library(RColorBrewer)
+library(ggrepel)
+library(biomaRt)
+library(DESeqAnalysis)
+library(UpSetR)
+library(gprofiler2)
+library(rrvgo)
+library(GO.db)
+library(ggfortify)
+GO <- as.list(GOTERM)
+```
+
+Define functions to make an interactive plots from revigo data (code based off `shiny_rrvgo`)
+
+```{r include=FALSE}
+revigo_scatterplot <- function(simMatrix, reducedTerms) {
+  x <- cmdscale(as.matrix(as.dist(1-simMatrix)), eig=TRUE, k=2)
+  df <- cbind(as.data.frame(x$points),
+              reducedTerms[match(rownames(x$points), reducedTerms$go), c("term", "parent", "parentTerm", "size")])
+  
+  p <-  scatterPlot(simMatrix, reducedTerms, addLabel=FALSE)
+  
+  p <- p + geom_text(aes(label=parentTerm), data=subset(df, parent == rownames(df)), size=3) # scatter labels
+  p <- p + theme(legend.position='none') # scatter legend 
+  ggplotly(p)
+}
+
+revigo_heatmap <- function(simMatrix, reducedTerms) {
+  ann <- reducedTerms$term[match(reducedTerms$parent, reducedTerms$go)]
+  ann <- data.frame(ann[match(rownames(simMatrix), reducedTerms$go)])
+  colnames(ann) <- ""
+  heatmaply::heatmaply(simMatrix, row_side_colors=ann, plot_method="plotly",
+                       symm=TRUE, labRow=NULL, key.title="Similarity",
+                       showticklabels=c(FALSE, TRUE),
+                       width=1024, height=1024,
+                       row_side_palette=rrvgo:::gg_color_hue,
+                       show_dendrogram=rep(TRUE, 2),
+                       fontsize_row=6) %>%
+  colorbar(xanchor="left", yanchor="bottom", len=.2, tickfont=list(size=6), which=1) %>%
+  colorbar(xanchor="left", yanchor="bottom", len=.5, tickfont=list(size=6), which=2) %>%
+  layout(width=1000)
+}
+```
+
+Define upset plot helper functions (code from https://github.com/hms-dbmi/UpSetR/issues/85#issuecomment-415480954)
+```{r include=FALSE}
+overlapGroups <- function (listInput, sort = TRUE) {
+  # listInput could look like this:
+  # $one
+  # [1] "a" "b" "c" "e" "g" "h" "k" "l" "m"
+  # $two
+  # [1] "a" "b" "d" "e" "j"
+  # $three
+  # [1] "a" "e" "f" "g" "h" "i" "j" "l" "m"
+  listInputmat    <- fromList(listInput) == 1
+  #     one   two three
+  # a  TRUE  TRUE  TRUE
+  # b  TRUE  TRUE FALSE
+  #...
+  # condensing matrix to unique combinations elements
+  listInputunique <- unique(listInputmat)
+  grouplist <- list()
+  # going through all unique combinations and collect elements for each in a list
+  for (i in 1:nrow(listInputunique)) {
+    currentRow <- listInputunique[i,]
+    myelements <- which(apply(listInputmat,1,function(x) all(x == currentRow)))
+    attr(myelements, "groups") <- currentRow
+    grouplist[[paste(colnames(listInputunique)[currentRow], collapse = ":")]] <- myelements
+    myelements
+    # attr(,"groups")
+    #   one   two three 
+    # FALSE FALSE  TRUE 
+    #  f  i 
+    # 12 13 
+  }
+  if (sort) {
+    grouplist <- grouplist[order(sapply(grouplist, function(x) length(x)), decreasing = TRUE)]
+  }
+  attr(grouplist, "elements") <- unique(unlist(listInput))
+  return(grouplist)
+}
+
+getUpsetPlotData <- function(listInput) {
+  # listInput could look like this:
+  # $one
+  # [1] "a" "b" "c" "e" "g" "h" "k" "l" "m"
+  # $two
+  # [1] "a" "b" "d" "e" "j"
+  # $three
+  # [1] "a" "e" "f" "g" "h" "i" "j" "l" "m"
+  upsetPlotData.messy <- overlapGroups(listInput)
+  upsetPlotData <- purrr::map(upsetPlotData.messy, ~ attr(upsetPlotData.messy, "elements")[.x])
+  # Adds NA values until each is the same length so we can format in a data frame
+  upsetPlotData.df <- as.data.frame(lapply(upsetPlotData, `length<-`, max(lengths(upsetPlotData))))
+  return(upsetPlotData.df)
+}
+```
+
+## DESeq2 - setup
+
+### Read in metadata table
+
+```{r}
+sensitive_resistant_pairs <- c("OVCAR3A_vs_OVCAR3", "OVCAR3B_vs_OVCAR3", "OVCAR4A_vs_OVCAR4", "OVCAR4B_vs_OVCAR4", "PEA2_vs_PEA1", "PEO6_vs_PEO1", "PEO4_vs_PEO1")
+
+isolines <- data.frame(pair = sensitive_resistant_pairs,
+                       isoline = c("OVCAR3",
+                                   "OVCAR3",
+                                   "OVCAR4",
+                                   "OVCAR4",
+                                   "PEA",
+                                   "PEO",
+                                   "PEO"))
+```
+
+```{r load metatable}
+metadata.all <- as.data.frame(read.table("deseq/metadata.csv", sep = ",", header = TRUE))
+rownames(metadata.all) <- metadata.all$ShortName
+
+# Should put this in the metadata file, but just doing this to save time
+for (row in 1:nrow(metadata.all)) {
+    isogenicRank <- 1
+    resistant <- 0
+    if (metadata.all$CellLine[row] %in% list("OVCAR3A", "OVCAR4A", "PEA2", "PEO4")) {
+      isogenicRank <- 2
+      resistant <- 1
+    } else if (metadata.all$CellLine[row] %in% list("OVCAR3B", "OVCAR4B", "PEO6")) {
+      isogenicRank <- 3
+      resistant <- 1
+    }
+    metadata.all$IsogenicRank[row] <- isogenicRank
+    metadata.all$Resistant[row] <- resistant
+}
+metadata.all
+```
+
+### Load count matrix
+
+```{r read count matrix}
+countmatrix <- as.matrix(read.table("../star_salmon/salmon.merged.gene_counts.tsv", sep = "\t", header = TRUE))
+row.names(countmatrix) <- countmatrix[, "gene_name"]
+countmatrix <- countmatrix[, 3:ncol(countmatrix)]
+countmatrix.all <- matrix(as.numeric(countmatrix), ncol = ncol(countmatrix), dimnames = list(rownames(countmatrix), colnames(countmatrix)))
+countmatrix.all <- round(countmatrix.all)
+countmatrix.all <- countmatrix.all[, metadata.all$LongName]
+colnames(countmatrix.all) <- metadata.all$ShortName[match(colnames(countmatrix.all), metadata.all$LongName)] # Renames the Salmon countmatrix using formatted short name
+as.data.frame(countmatrix.all)
+```
+
+### Load TPM matrix
+```{r}
+TPM <- as.matrix(read.delim("../star_salmon/salmon.merged.gene_tpm.tsv", sep="\t", row.names="gene_id"))
+TPM <- TPM[,-1]
+TPM <- matrix(as.numeric(TPM), ncol = ncol(TPM), dimnames = list(rownames(TPM), colnames(TPM)))
+TPM.log <- log(TPM + 1)
+as.data.frame(TPM.log)
+colnames(TPM.log) <- metadata.all$ShortName
+```
+
+## PCA plot
+
+Running DESeq on all of the celllines together to get normalized data.
+
+```{r}
+dds.all = DESeqDataSetFromMatrix(
+  countData = countmatrix.all,
+  colData = metadata.all,
+  design = ~ Replicate + CellLine
+)
+dds.all = DESeq(dds.all)
+save(dds.all, file = str_interp("deseq/Rdata/all_celllines_dds.RData"))
+# load(str_interp("deseq/Rdata/all_celllines_dds.RData"))
+```
+Transform data with a variance stabilized transformation
+
+```{r}
+vsd.all = assay(vst(dds.all))
+meanSdPlot(vsd.all)
+```
+
+<!-- PCA Plot -->
+
+<!-- Old formatting -->
+
+<!-- ```{r} -->
+<!-- vsd.all = as.data.frame(vsd.all) -->
+<!-- transformed = as.data.frame(t(vsd.all)) -->
+<!-- pcaRes = prcomp(transformed[,-1], scale = TRUE) -->
+
+<!-- pca_metadata = colData(dds.all)[,c("CellLine", "Resistant", "IsoLine")] -->
+<!-- pca_metadata$Resistance <- ifelse(pca_metadata$Resistant == 0, "Sensitive", "Resistant") -->
+<!-- row.names(pca_metadata) <- colData(dds.all)[,c("ShortName")] -->
+
+<!-- transformed$IsoLine <- factor(pca_metadata$IsoLine) -->
+<!-- transformed$CellLine <- factor(pca_metadata$CellLine) -->
+<!-- transformed$Resistance <- factor(pca_metadata$Resistance) -->
+
+<!-- autoplot(pcaRes, data = transformed, colour = "CellLine", shape = "Resistance", size = 3) -->
+<!-- # ggsave("deseq/output/pca_all_celllines.svg", -->
+<!-- #        plot = last_plot(), -->
+<!-- #        device = "svg", -->
+<!-- #        width = 6, -->
+<!-- #        units = "in") -->
+
+<!-- # Compute top contributing genes to PC1 and PC2 -->
+<!-- loadings_pc1 <- pcaRes$rotation[,"PC1"] -->
+<!-- contributing_genes_pc1 <- loadings_pc1[order(abs(loadings_pc1), decreasing = TRUE)] -->
+<!-- print(as.data.frame(contributing_genes_pc1)) -->
+
+<!-- loadings_pc2 <- pcaRes$rotation[, "PC2"] -->
+<!-- contributing_genes_pc2 <- loadings_pc2[order(abs(loadings_pc2), decreasing = TRUE)] -->
+<!-- print(as.data.frame(contributing_genes_pc2)) -->
+
+<!-- ``` -->
+
+PCA plot formatted for paper
+
+```{r}
+vsd.all.fullobj = vst(dds.all)
+pcaData <- plotPCA(vsd.all.fullobj, intgroup=c("CellLine", "Resistant"), returnData=TRUE)
+pcaData$Resistance <- ifelse(pcaData$Resistant == 0, "Sensitive", "Resistant")
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+myColors <- c("#76AB7E", "#63E678", "#0E9D1F", "#7B87FD", "#1D32FB", "#1452FB", "#E87426", "#DAC426", "#8769E7", "#E019E7", "#9B19E7")
+names(myColors) <- levels(pcaData$CellLine)
+colScale <- scale_colour_manual(name = "CellLine",values = myColors)
+pca <- ggplot(pcaData, aes(PC1, PC2, color=CellLine, shape=Resistance, label="")) +
+  geom_point(size=3) +
+  geom_text(hjust=0, vjust=0) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) +
+  coord_fixed() +
+  theme_classic() + 
+  colScale
+pca
+ggsave("deseq/output/pca_all_celllines_formatted.svg",
+       plot = last_plot(),
+       device = "svg",
+       width = 6,
+       units = "in")
+```
+
+## DESeq2 - Analysis of each Sensitive/Resistant pair
+
+```{r sensitive resistant pair, results = FALSE}
+for (pair in sensitive_resistant_pairs) {
+  split <- strsplit(pair, "_vs_")
+  cont <- split[[1]][2]
+  exp <- split[[1]][1]
+  
+  # Creates another notebook that shares the same environment
+  outFile <- str_interp("generated-notebooks/deseq-analysis-${pair}.html")
+  print(str_interp("Creating notebook for ${exp} vs ${cont}"))
+  rmarkdown::render('deseq/single-cellline-vs-control.Rmd', 
+                    output_file = outFile, 
+                    params = list(controlCellLine = cont, 
+                                  experimentalCellLine = exp,
+                                  countmatrix.all = countmatrix.all,
+                                  metadata.all = metadata.all))
+}
+```
+
+### Combine results across pairs
+
+Combine differential gene data
+
+```{r combine deseq results}
+full_results_genes <- data.frame()
+for (pair in sensitive_resistant_pairs) {
+  pair_results_file <- str_interp("deseq/output/${pair}_deseq_results.csv")
+  pair_results <- as.data.frame(read.csv(pair_results_file, sep = ",", header = TRUE, row.names = 1))
+  pair_results_formatted <- pair_results[, c("padj", "log2FoldChange")]
+  colnames(pair_results_formatted) <- c(str_interp("${pair}_padj"), str_interp("${pair}_l2fc"))
+  pair_results_formatted$gene <- rownames(pair_results_formatted)
+
+  if (ncol(full_results_genes) == 0) {
+    full_results_genes = pair_results_formatted
+  } else {
+    full_results_genes <- merge(full_results_genes, pair_results_formatted, by = "gene", all = TRUE)
+  }
+}
+
+rownames(full_results_genes) <- full_results_genes$gene
+full_results_genes <- subset(full_results_genes, select = -c(gene))
+
+for (row in 1:nrow(full_results_genes)){
+  num_pairs_sig_regulated = 0
+  num_pairs_sig_downregulated = 0
+  num_pairs_sig_upregulated = 0
+  for (pair in sensitive_resistant_pairs) {
+    padj = full_results_genes[row, str_interp("${pair}_padj")]
+    l2fc = full_results_genes[row, str_interp("${pair}_l2fc")]
+    if (!is.na(padj) && padj < 0.05) {
+      if (l2fc < 0) {
+        num_pairs_sig_downregulated = num_pairs_sig_downregulated + 1
+      } else if (l2fc > 0) {
+        num_pairs_sig_upregulated = num_pairs_sig_upregulated + 1
+      }
+    }
+  }
+  full_results_genes[row, "num_pairs_sig_up_regulated"] = num_pairs_sig_upregulated
+  full_results_genes[row, "num_pairs_sig_down_regulated"] = num_pairs_sig_downregulated
+  full_results_genes[row, "num_pairs_sig_regulated"] = num_pairs_sig_upregulated + num_pairs_sig_downregulated
+}
+
+full_results_genes = full_results_genes %>% 
+  relocate(num_pairs_sig_down_regulated)%>% 
+  relocate(num_pairs_sig_up_regulated) %>% 
+  relocate(num_pairs_sig_regulated)
+full_results_genes = full_results_genes[order(full_results_genes$num_pairs_sig_regulated, decreasing = TRUE),]
+
+print(full_results_genes)
+write.csv(full_results_genes, file = "deseq/output/differential_gene_expression_all_sensitive_resistant_pairs.csv")
+```
+
+Combine differential pathway data
+
+```{r}
+### Combine results across pairs
+full_results_pathways <- data.frame()
+for (pair in sensitive_resistant_pairs) {
+  pair_up_pathways_file <- str_interp("deseq/output/${pair}_significantly_upregulated_pathways.csv")
+  pair_up_pathways <- as.data.frame(read.csv(pair_up_pathways_file, sep = ",", header = TRUE, row.names = 1))
+  
+  pair_down_pathways_file <- str_interp("deseq/output/${pair}_significantly_downregulated_pathways.csv")
+  pair_down_pathways <- as.data.frame(read.csv(pair_down_pathways_file, sep = ",", header = TRUE, row.names = 1))
+  
+  pair_pathways = rbind(pair_up_pathways, pair_down_pathways)
+  pair_pathways$ID = rownames(pair_pathways)
+  pair_pathways_formatted = pair_pathways[, c("ID", "Description", "p.adjust", "NES")]
+
+  colnames(pair_pathways_formatted) <- c("ID", "Description", str_interp("${pair}_padj"), str_interp("${pair}_NES"))
+  
+  if (ncol(full_results_pathways) == 0) {
+    full_results_pathways = pair_pathways_formatted
+  } else {
+    full_results_pathways <- merge(full_results_pathways, pair_pathways_formatted, by = c("ID", "Description"), all = TRUE)
+  }
+}
+
+rownames(full_results_pathways) <- full_results_pathways$ID
+full_results_pathways <- subset(full_results_pathways, select = -c(ID))
+
+for (row in 1:nrow(full_results_pathways)){
+  num_pairs_sig_regulated = 0
+  num_pairs_sig_downregulated = 0
+  num_pairs_sig_upregulated = 0
+  for (pair in sensitive_resistant_pairs) {
+    padj = full_results_pathways[row, str_interp("${pair}_padj")]
+    NES = full_results_pathways[row, str_interp("${pair}_NES")]
+    if (!is.na(padj) && padj < 0.05) {
+      if (NES < 0) {
+        num_pairs_sig_downregulated = num_pairs_sig_downregulated + 1
+      } else if (NES > 0) {
+        num_pairs_sig_upregulated = num_pairs_sig_upregulated + 1
+      }
+    }
+  }
+  full_results_pathways[row, "num_pairs_sig_up_regulated"] = num_pairs_sig_upregulated
+  full_results_pathways[row, "num_pairs_sig_down_regulated"] = num_pairs_sig_downregulated
+  full_results_pathways[row, "num_pairs_sig_regulated"] = num_pairs_sig_upregulated + num_pairs_sig_downregulated
+}
+
+full_results_pathways = full_results_pathways %>% 
+  relocate(num_pairs_sig_down_regulated)%>% 
+  relocate(num_pairs_sig_up_regulated) %>% 
+  relocate(num_pairs_sig_regulated)
+full_results_pathways = full_results_pathways[order(full_results_pathways$num_pairs_sig_regulated, decreasing = TRUE),]
+
+print(full_results_pathways)
+write.csv(full_results_pathways, file = "deseq/output/differential_pathways_all_sensitive_resistant_pairs.csv")
+```
+
+### Plot differential pathways
+
+Use REVIGO to cluster pathways
+
+```{r}
+
+similarity_matrix = calculateSimMatrix(rownames(full_results_pathways),
+                                       orgdb = "org.Hs.eg.db",
+                                       ont = "BP",
+                                       method = "Rel")
+
+scores = rep(1, ncol(similarity_matrix))
+names(scores) = colnames(similarity_matrix)
+reducedTerms = reduceSimMatrix(similarity_matrix,
+                               scores,
+                               threshold = 0.8,
+                               orgdb = "org.Hs.eg.db")
+```
+
+Plot consistently differential pathways for all celllines in one plot
+
+```{r, fig.width=15, fig.height=8}
+darken_color <- function(color, factor = 0.5) {
+  # Convert color to RGB
+  rgb_vals <- col2rgb(color) / 255
+  # Darken each RGB channel
+  darkened_vals <- rgb_vals * factor
+  # Ensure values are within valid range [0, 1]
+  darkened_vals <- pmin(pmax(darkened_vals, 0), 1)
+  # Convert back to hexadecimal color
+  darkened_color <- rgb(darkened_vals[1], darkened_vals[2], darkened_vals[3], maxColorValue = 255)
+  return(darkened_color)
+}
+
+
+format_pathway_results = full_results_pathways
+# Subset to terms able to be clustered
+format_pathway_results = format_pathway_results[rownames(format_pathway_results) %in% rownames(reducedTerms),]
+format_pathway_results = format_pathway_results[,- which(colnames(format_pathway_results) %in% c("num_pairs_sig_down_regulated", "num_pairs_sig_up_regulated"))]
+
+# Change formatting of column names so that it is easier for pivot function below
+colnames(format_pathway_results) = colnames(format_pathway_results) %>%
+  map_chr(\(x) sub("_(?=[^_]*$)", "-", x, perl = TRUE))
+
+# Set parent terms
+format_pathway_results$parentPathwayId = rownames(format_pathway_results) %>%
+  map_chr(\(x) reducedTerms[rownames(reducedTerms) == x, "parent"])
+format_pathway_results$parentPathwayDescription = format_pathway_results$parentPathwayId %>%
+  map_chr(\(x) paste0(format_pathway_results[rownames(format_pathway_results) == x, "Description"], " (", nrow(format_pathway_results[format_pathway_results$parentPathwayId == x,]), ")"))
+
+pivot_cols = colnames(format_pathway_results)
+pivot_cols = pivot_cols[!(pivot_cols %in% c("Description", "num_pairs_sig-regulated", "parentPathwayId", "parentPathwayDescription"))]
+plot_data = pivot_longer(data = format_pathway_results,
+                         cols = pivot_cols,
+                         names_to = c("celllinePair", ".value"),
+                         names_sep = "-")
+
+# Score the term categories by combining scores across all child pathways and all cellline pairs
+plot_data$score = plot_data$NES
+# plot_data$score = -log10(plot_data$padj) * plot_data$NES
+plot_data = plot_data %>%
+  group_by(parentPathwayId) %>%
+  mutate(category_score = mean(score, na.rm = TRUE))
+
+# Order terms by the score of the parent pathway
+plot_data = plot_data %>% arrange(category_score, score)
+plot_data$parentPathwayDescription <- factor(plot_data$parentPathwayDescription, levels = unique(plot_data$parentPathwayDescription))
+
+# Shift NES so that the -1 to 1 region doesn't go unused
+if (any(abs(plot_data$NES)) < 1) {
+  print("ERROR: This plot will be messed up because we assumed novalues of NES between -1 and 1.")
+}
+# plot_data$shift_NES = plot_data$NES %>%
+#   map_dbl(\(x) ifelse(x > 1, x - 1, ifelse(x < -1, x + 1, x)))
+
+ggplot(plot_data, aes(x = NES, y = parentPathwayDescription, size = -log10(padj), color = celllinePair)) +
+  geom_point(position = position_jitter(height = 0.1), alpha = 0.5, layer = "above") +  # Add jitter and reduce point transparency
+  scale_size_continuous(range = c(1, 5)) +
+  # Coloring by in vivo/in vitro resistance (OVCARs both in vitro; PEO and PEAs in vivo)
+  scale_color_manual(values = c("#F71300", "#E7CF00",
+                                "#F55AFA", "#BD8161",
+                                "#11DBCC", "#0E58E4",
+                                "#14B70A")) +
+  geom_hline(yintercept = seq_along(levels(plot_data$parentPathwayDescription)), color = "gray", size = 0.1, layer = "below") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+
+  labs(x = 'Normalized Enrichment Score', y = 'Pathway Category (# pathways)', color = 'Cellline Pair') +
+  ggtitle('Pathway regulation in resistant celllines (as compared to corresponding sensitive cellline)') +
+  theme(panel.grid.minor.x = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        panel.grid.major.y = element_blank()) +
+  theme_classic()
+
+ggsave("deseq/output/differential_pathways_all_celllines_similarity_threshold_0.8.svg",
+       plot = last_plot(),
+       device = "svg",
+       width = 15,
+       height = 10,
+       units = "in")
+
+## plot in vitro resistance only
+ggplot(plot_data[plot_data$celllinePair %in% c("OVCAR4B_vs_OVCAR4", "OVCAR4A_vs_OVCAR4", "OVCAR3A_vs_OVCAR3", "OVCAR3B_vs_OVCAR3"),], aes(x = NES, y = parentPathwayDescription, size = -log10(padj), color = celllinePair)) +
+  geom_point(position = position_jitter(height = 0.1), alpha = 0.5, layer = "above") +  # Add jitter and reduce point transparency
+  scale_size_continuous(range = c(1, 5)) +
+  scale_color_manual(values = c("#F71300", "#E7CF00",
+                                "#F55AFA", "#BD8161")) +
+  geom_hline(yintercept = seq_along(levels(plot_data$parentPathwayDescription)), color = "gray", size = 0.1, layer = "below") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+
+  labs(x = 'Normalized Enrichment Score', y = 'Pathway Category (# pathways)', color = 'Cellline Pair') +
+  ggtitle('Pathway regulation in in-vitro derived resistant celllines') +
+  theme(panel.grid.minor.x = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        panel.grid.major.y = element_blank()) +
+  theme_classic()
+
+## plot in vivo resistance only
+ggplot(plot_data[plot_data$celllinePair %in% c("PEO4_vs_PEO2", "PEO6_vs_PEO2", "PEA2_vs_PEA1"),], aes(x = NES, y = parentPathwayDescription, size = -log10(padj), color = celllinePair)) +
+  geom_point(position = position_jitter(height = 0.1), alpha = 0.5, layer = "above") +  # Add jitter and reduce point transparency
+  scale_size_continuous(range = c(1, 5)) +
+  scale_color_manual(values = c("#11DBCC", "#0E58E4",
+                                "#14B70A")) +
+  geom_hline(yintercept = seq_along(levels(plot_data$parentPathwayDescription)), color = "gray", size = 0.1, layer = "below") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+
+  labs(x = 'Normalized Enrichment Score', y = 'Pathway Category (# pathways)', color = 'Cellline Pair') +
+  ggtitle('Pathway regulation in in-vivo derived resistant celllines') +
+  theme(panel.grid.minor.x = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        panel.grid.major.y = element_blank()) +
+  theme_classic()
+
+```
+### Plot differential pathways
+
+Plot shows how the spread of significantly differential pathways across sensitive/resistant pairs.
+
+```{r, fig.width = 10, fig.height = 5}
+plot_data = full_results_pathways[,c("num_pairs_sig_up_regulated", "num_pairs_sig_down_regulated", "Description")]
+print(plot_data)
+# Orders primarily by how many more pairs were sig up than sig down regulated
+# Orders secondarily by how few pairs were regulated in the non-dominant direction
+# This ordering does the following: (7, 0) > (6, 0) > (5, 0) > (6, 1) > (7, 2)
+plot_data <- plot_data %>%
+  mutate(order = ifelse(num_pairs_sig_up_regulated > num_pairs_sig_down_regulated,
+                        num_pairs_sig_up_regulated - num_pairs_sig_down_regulated * 1.01,
+                        -1 * (num_pairs_sig_down_regulated - num_pairs_sig_up_regulated * 1.01)))
+
+plot_data <- plot_data %>%
+  arrange(desc(order))
+
+plot_data = plot_data %>%
+  mutate(panel = ifelse(num_pairs_sig_up_regulated > num_pairs_sig_down_regulated,
+                        "overall upregulated",
+                        ifelse(num_pairs_sig_down_regulated == num_pairs_sig_up_regulated,
+                               "evenly up and down regulated",
+                               "overall downregulated")))
+plot_data$panel = factor(plot_data$panel, levels = c("overall upregulated", "evenly up and down regulated", "overall downregulated"))
+
+# organize the x coordinates based on panel
+plot_data$left_placement = 0:(nrow(plot_data) - 1)
+equal_panel_start = min(plot_data[plot_data$panel == "evenly up and down regulated", "left_placement"])
+plot_data[plot_data$panel == "evenly up and down regulated",]$left_placement = plot_data[plot_data$panel == "evenly up and down regulated",]$left_placement - equal_panel_start
+down_panel_start = min(plot_data[plot_data$panel == "overall downregulated", "left_placement"])
+plot_data[plot_data$panel == "overall downregulated",]$left_placement = plot_data[plot_data$panel == "overall downregulated",]$left_placement - down_panel_start
+
+plot_data$center_placement = plot_data$left_placement + 0.5
+
+# Create bar plot
+ggplot(plot_data) +
+  facet_wrap(~panel, ncol = 3) +
+  geom_bar(aes(x = center_placement, y = -1 * num_pairs_sig_down_regulated, fill = "downregulation", width = 1), stat = "identity") +
+  geom_bar(aes(x = center_placement, y = num_pairs_sig_up_regulated, fill = "upregulation", width = 1), stat = "identity") +
+  scale_y_continuous(limits = c(-max(plot_data$num_pairs_sig_down_regulated) -1, max(plot_data$num_pairs_sig_up_regulated)) +1) +
+  theme_minimal() +  # Apply a minimal theme
+  labs(x = "Pathways", y = "# resistant celllines showing significant regulation of pathway") + # Set axis labels
+  scale_fill_manual(values = c("upregulation" = "green", "downregulation" = "red")) + # Set fill colors
+  theme_classic() + 
+  theme(panel.grid.minor.x = element_blank(),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor.y = element_blank(),
+      panel.grid.major.y = element_blank()) +
+  ggtitle('Pathway regulation in resistant celllines (as compared to corresponding sensitive cellline)')
+  
+
+ggsave("deseq/output/consistently_differential_pathways_all_celllines.svg",
+       plot = last_plot(),
+       device = "svg",
+       width = 10,
+       height = 5,
+       units = "in")
+```
+
+Close up of consistently upregulated pathways
+
+```{r, figure.width = 10, figure.height = 5}
+# End the plot between "categories" of pathways, including less than 100 pathways total
+end_index = 1
+for(i in 1:100) {
+  if (plot_data$order[i] != plot_data$order[i+1]) {
+    end_index = i
+  }
+}
+
+plot_data_up = plot_data[1:end_index,]
+plot_data_up$pathway = plot_data_up$Description
+
+print(plot_data_up)
+
+ggplot(plot_data_up) +
+  geom_bar(aes(x = center_placement, y = -1 * num_pairs_sig_down_regulated, fill = "downregulation", width = 1), stat = "identity") +
+  geom_bar(aes(x = center_placement, y = num_pairs_sig_up_regulated, fill = "upregulation", width = 1), stat = "identity") +
+  geom_text(aes(x = center_placement, y = 1, label = pathway), size = 2, color = "black", angle = 90) +
+  scale_y_continuous(limits = c(-max(plot_data_up$num_pairs_sig_down_regulated) -1, max(plot_data_up$num_pairs_sig_up_regulated)) +1) +
+  theme_minimal() +  # Apply a minimal theme
+  labs(x = "Pathways", y = "# resistant celllines showing significant regulation of pathway") + # Set axis labels
+  scale_fill_manual(values = c("upregulation" = "green", "downregulation" = "red")) + # Set fill colors
+  theme_classic() + 
+  theme(panel.grid.minor.x = element_blank(),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor.y = element_blank(),
+      panel.grid.major.y = element_blank()) +
+  ggtitle('Zooming in on left hand side (extremely consistently upregulated pathways)')
+
+ggsave("deseq/output/consistently_upregulated_pathways_all_celllines.svg",
+       plot = last_plot(),
+       device = "svg",
+       width = 10,
+       height = 5,
+       units = "in")
+```
+
+Close up of consistently downregulated pathways
+
+```{r, figure.width = 10, figure.height = 5}
+# End the plot between "categories" of pathways, including less than 100 pathways total
+start_index = 1
+for(i in nrow(plot_data):(nrow(plot_data) - 99)) {
+  if (plot_data$order[i] != plot_data$order[i-1]) {
+    start_index = i
+  }
+}
+
+plot_data_down = plot_data[start_index:nrow(plot_data),]
+plot_data_down$center_placement = plot_data_down$center_placement - start_index + 1 # Start at 0
+plot_data_down$pathway = plot_data_down$Description
+
+print(plot_data_down)
+
+ggplot(plot_data_down) +
+  geom_bar(aes(x = center_placement, y = -1 * num_pairs_sig_down_regulated, fill = "downregulation", width = 1), stat = "identity") +
+  geom_bar(aes(x = center_placement, y = num_pairs_sig_up_regulated, fill = "upregulation", width = 1), stat = "identity") +
+  geom_text(aes(x = center_placement, y = -1, label = pathway), size = 2, color = "black", angle = 90) +
+  scale_y_continuous(limits = c(-max(plot_data_down$num_pairs_sig_down_regulated) -1, max(plot_data_down$num_pairs_sig_up_regulated)) +1) +
+  theme_minimal() +  # Apply a minimal theme
+  labs(x = "Pathways", y = "# resistant celllines showing significant regulation of pathway") + # Set axis labels
+  scale_fill_manual(values = c("upregulation" = "green", "downregulation" = "red")) + # Set fill colors
+  theme_classic() + 
+  theme(panel.grid.minor.x = element_blank(),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor.y = element_blank(),
+      panel.grid.major.y = element_blank()) +
+  ggtitle('Zooming in on right hand side (extremely consistently downregulated pathways)')
+
+ggsave("deseq/output/consistently_downregulated_pathways_all_celllines.svg",
+       plot = last_plot(),
+       device = "svg",
+       width = 10,
+       height = 5,
+       units = "in")
+```
+### Plot differential genes
+
+Plot shows how the spread of significantly differential genes across sensitive/resistant pairs.
+
+```{r, fig.width = 10, fig.height = 5}
+# formatted_gene_results = full_results_genes[,c("num_pairs_sig_up_regulated", "num_pairs_sig_down_regulated")]
+
+plot_data = full_results_genes[,c("num_pairs_sig_up_regulated", "num_pairs_sig_down_regulated")]
+
+# plot_data <- full_results_genes %>%
+#   group_by(num_pairs_sig_up_regulated, num_pairs_sig_down_regulated) %>%
+#   summarise(count = n())
+
+# Orders primarily by how many more pairs were sig up than sig down regulated
+# Orders secondarily by how few pairs were regulated in the non-dominant direction
+# This ordering does the following: (7, 0) > (6, 0) > (5, 0) > (6, 1) > (7, 2)
+plot_data <- plot_data %>%
+  mutate(order = ifelse(num_pairs_sig_up_regulated > num_pairs_sig_down_regulated,
+                        num_pairs_sig_up_regulated - num_pairs_sig_down_regulated * 1.01,
+                        -1 * (num_pairs_sig_down_regulated - num_pairs_sig_up_regulated * 1.01)))
+
+plot_data <- plot_data %>%
+  arrange(desc(order))
+
+plot_data = plot_data %>%
+  mutate(panel = ifelse(num_pairs_sig_up_regulated > num_pairs_sig_down_regulated,
+                        "overall upregulated",
+                        ifelse(num_pairs_sig_down_regulated == num_pairs_sig_up_regulated,
+                               "evenly up and down regulated",
+                               "overall downregulated")))
+plot_data$panel = factor(plot_data$panel, levels = c("overall upregulated", "evenly up and down regulated", "overall downregulated"))
+
+# Add a small amount of color if not regulated
+unregulated = plot_data$num_pairs_sig_up_regulated == 0 & plot_data$num_pairs_sig_down_regulated == 0
+plot_data[unregulated,]$num_pairs_sig_up_regulated = 0.005
+plot_data[unregulated,]$num_pairs_sig_down_regulated = -0.005
+
+# organize the x coordinates based on panel
+plot_data$left_placement = 0:(nrow(plot_data) - 1)
+equal_panel_start = min(plot_data[plot_data$panel == "evenly up and down regulated", "left_placement"])
+plot_data[plot_data$panel == "evenly up and down regulated",]$left_placement = plot_data[plot_data$panel == "evenly up and down regulated",]$left_placement - equal_panel_start
+down_panel_start = min(plot_data[plot_data$panel == "overall downregulated", "left_placement"])
+plot_data[plot_data$panel == "overall downregulated",]$left_placement = plot_data[plot_data$panel == "overall downregulated",]$left_placement - down_panel_start
+
+plot_data$center_placement = plot_data$left_placement + 0.5
+
+# next_placement = 0
+# for(row in 1:nrow(plot_data)) {
+#   new_placement = next_placement
+#   plot_data[row, "left_placement"] = new_placement
+#   next_placement = new_placement + plot_data[row, "count"]
+# }
+
+# Need the center of the bar for plotting purposes
+# plot_data$center_placement = plot_data$left_placement + plot_data$count/2
+
+print(plot_data)
+
+# Create bar plot
+ggplot(plot_data) +
+  facet_wrap(~panel, ncol = 3, scales = "fixed") +
+  geom_bar(aes(x = center_placement, y = -1 * num_pairs_sig_down_regulated, fill = "downregulation", width = 1), stat = "identity") +
+  geom_bar(aes(x = center_placement, y = num_pairs_sig_up_regulated, fill = "upregulation", width = 1), stat = "identity") +
+  # geom_bar(aes(x = center_placement, y = -1 * num_pairs_sig_down_regulated, fill = "downregulation", width = count), stat = "identity") +
+  # geom_bar(aes(x = center_placement, y = num_pairs_sig_up_regulated, fill = "upregulation", width = count), stat = "identity") +
+  scale_y_continuous(limits = c(-max(plot_data$num_pairs_sig_down_regulated) -1, max(plot_data$num_pairs_sig_up_regulated)) +1) +
+  # Set y-axis limits
+  # coord_flip() +  # Flip the coordinates to create a sideways plot
+  theme_minimal() +  # Apply a minimal theme
+  labs(x = "Genes", y = "# resistant celllines showing significant regulation of gene") + # Set axis labels
+  scale_fill_manual(values = c("upregulation" = "green", "downregulation" = "red")) + # Set fill colors
+  theme_classic() + 
+  theme(panel.grid.minor.x = element_blank(),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor.y = element_blank(),
+      panel.grid.major.y = element_blank()) +
+      # axis.ticks.x = element_blank(),
+      # axis.text.x = element_blank()) +
+  ggtitle('Gene regulation in resistant celllines (as compared to corresponding sensitive cellline)')
+  
+
+ggsave("deseq/output/differential_genes_all_celllines.svg",
+       plot = last_plot(),
+       device = "svg",
+       width = 10,
+       height = 5,
+       units = "in")
+```
+
+Close up of consistently upregulated genes
+
+```{r, figure.width = 10, figure.height = 5}
+# End the plot between "categories" of genes, including less than 100 genes total
+end_index = 1
+for(i in 1:100) {
+  if (plot_data$order[i] != plot_data$order[i+1]) {
+    end_index = i
+  }
+}
+
+plot_data_up = plot_data[1:end_index,]
+plot_data_up$gene = rownames(plot_data_up)
+
+print(plot_data_up)
+
+ggplot(plot_data_up) +
+  geom_bar(aes(x = center_placement, y = -1 * num_pairs_sig_down_regulated, fill = "downregulation", width = 1), stat = "identity") +
+  geom_bar(aes(x = center_placement, y = num_pairs_sig_up_regulated, fill = "upregulation", width = 1), stat = "identity") +
+  geom_text(aes(x = center_placement, y = 1, label = gene), size = 2, color = "black", angle = 90) +
+  # geom_bar(aes(x = center_placement, y = -1 * num_pairs_sig_down_regulated, fill = "downregulation", width = count), stat = "identity") +
+  # geom_bar(aes(x = center_placement, y = num_pairs_sig_up_regulated, fill = "upregulation", width = count), stat = "identity") +
+  scale_y_continuous(limits = c(-max(plot_data_up$num_pairs_sig_down_regulated) -1, max(plot_data_up$num_pairs_sig_up_regulated)) +1) +
+  # Set y-axis limits
+  # coord_flip() +  # Flip the coordinates to create a sideways plot
+  theme_minimal() +  # Apply a minimal theme
+  labs(x = "Genes", y = "# resistant celllines showing significant regulation of gene") + # Set axis labels
+  scale_fill_manual(values = c("upregulation" = "green", "downregulation" = "red")) + # Set fill colors
+  theme_classic() + 
+  theme(panel.grid.minor.x = element_blank(),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor.y = element_blank(),
+      panel.grid.major.y = element_blank()) +
+      # axis.ticks.x = element_blank(),
+      # axis.text.x = element_blank()) +
+  ggtitle('Zooming in on left hand side (extremely consistently upregulated genes)')
+  # ggtitle('Genes extremely consistently upregulated in resistant celllines')
+
+ggsave("deseq/output/consistently_upregulated_genes_all_celllines.svg",
+       plot = last_plot(),
+       device = "svg",
+       width = 10,
+       height = 5,
+       units = "in")
+```
+
+Close up of consistently downregulated genes
+
+```{r, figure.width = 10, figure.height = 5}
+# End the plot between "categories" of genes, including less than 100 genes total
+start_index = 1
+for(i in nrow(plot_data):(nrow(plot_data) - 99)) {
+  if (plot_data$order[i] != plot_data$order[i-1]) {
+    start_index = i
+  }
+}
+
+plot_data_down = plot_data[start_index:nrow(plot_data),]
+plot_data_down$center_placement = plot_data_down$center_placement - start_index + 1 # Start at 0
+plot_data_down$gene = rownames(plot_data_down)
+
+print(plot_data_down)
+
+ggplot(plot_data_down) +
+  geom_bar(aes(x = center_placement, y = -1 * num_pairs_sig_down_regulated, fill = "downregulation", width = 1), stat = "identity") +
+  geom_bar(aes(x = center_placement, y = num_pairs_sig_up_regulated, fill = "upregulation", width = 1), stat = "identity") +
+  geom_text(aes(x = center_placement, y = 2, label = gene), size = 2, color = "black", angle = 90) +
+  # geom_bar(aes(x = center_placement, y = -1 * num_pairs_sig_down_regulated, fill = "downregulation", width = count), stat = "identity") +
+  # geom_bar(aes(x = center_placement, y = num_pairs_sig_up_regulated, fill = "upregulation", width = count), stat = "identity") +
+  scale_y_continuous(limits = c(-max(plot_data_down$num_pairs_sig_down_regulated) -1, max(plot_data_down$num_pairs_sig_up_regulated)) +1) +
+  # Set y-axis limits
+  # coord_flip() +  # Flip the coordinates to create a sideways plot
+  theme_minimal() +  # Apply a minimal theme
+  labs(x = "Genes", y = "# resistant celllines showing significant regulation of gene") + # Set axis labels
+  scale_fill_manual(values = c("upregulation" = "green", "downregulation" = "red")) + # Set fill colors
+  theme_classic() + 
+  theme(panel.grid.minor.x = element_blank(),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor.y = element_blank(),
+      panel.grid.major.y = element_blank()) +
+      # axis.ticks.x = element_blank(),
+      # axis.text.x = element_blank()) +
+  ggtitle('Zooming in on right hand side (extremely consistently downregulated genes)')
+  # ggtitle('Genes consistently upregulated in resistant celllines')
+
+ggsave("deseq/output/consistently_downregulated_genes_all_celllines.svg",
+       plot = last_plot(),
+       device = "svg",
+       width = 10,
+       height = 5,
+       units = "in")
+```
+
+## Upset plots
+
+Upset plots are akin to a Venn diagram and show the overlap of genes that were significantly up and down regulated by each resistant cellline (as compared to its respective control).
+
+Note that these upset plots use the "distinct" mode (meaning that each represented intersection consists of the "intersection elements that belong to the sets defining the intersection but not to any other set").
+
+TODO: which of the hundreds of possible combinations to show? For now I'm separating upregulation and downregulation to decrease the number of possible intersections by a lot, but I'm still only showing the top 50 intersections (ranked by degree -- i.e. number of cellLines that share that up or downregulated gene).
+
+### Combined up and down gene upset plot
+
+```{r combined upset plot}
+combinedUpsetListInput <- vector(mode="list", length=length(sensitive_resistant_pairs))
+for (pair in sensitive_resistant_pairs) {
+  split <- strsplit(pair, "_vs_")
+  cont <- split[[1]][2]
+  exp <- split[[1]][1]
+  for (dir in c("up", "down")) {
+    regulatedGenesFile = str_interp("deseq/output/${exp}_vs_${cont}_significantly_${dir}regulated_genes.csv")
+    regulatedGenes <- as.data.frame(read.csv(regulatedGenesFile, sep = ",", header = TRUE, row.names = 1))
+    key = str_interp("${exp}_sig_${dir}reg_genes")
+    combinedUpsetListInput[[key]] = rownames(regulatedGenes)
+  }
+}
+
+upset(fromList(combinedUpsetListInput), nsets = 14, nintersects = 50, order.by = "degree")
+```
+
+### Upregulated gene upset plot
+
+Shows only the upregulated genes.
+
+```{r upreg upset plot}
+upregUpsetListInput <- vector(mode="list", length=length(sensitive_resistant_pairs))
+for (pair in sensitive_resistant_pairs) {
+  split <- strsplit(pair, "_vs_")
+  cont <- split[[1]][2]
+  exp <- split[[1]][1]
+  
+  upGenesFile <- str_interp("deseq/output/${exp}_vs_${cont}_significantly_upregulated_genes.csv")
+  upGenes <- as.data.frame(read.csv(upGenesFile, sep = ",", header = TRUE, row.names = 1))
+  key = str_interp("${exp}_sig_upreg_genes")
+  upregUpsetListInput[[key]] = rownames(upGenes)
+}
+
+upset(fromList(upregUpsetListInput), nsets = 7, nintersects = 50, order.by = "degree")
+```
+
+Output the lists of genes corresponding to each column of the upset plot
+
+```{r upregulated upset plot data}
+fromList(upregUpsetListInput)
+upregUpsetPlotGenes.df <- getUpsetPlotData(upregUpsetListInput)
+write.csv(upregUpsetPlotGenes.df, file = "deseq/output/upset_plot_lists_significantly_upregulated_genes.csv")
+upregUpsetPlotGenes.df
+```
+
+### Downregulated gene upset plot
+
+Shows only the downregulated genes.
+
+```{r downreg upset plot}
+downregUpsetListInput <- vector(mode="list", length=length(sensitive_resistant_pairs))
+
+first_pair = TRUE
+consistent_down_genes = c()
+
+for (pair in sensitive_resistant_pairs) {
+  split <- strsplit(pair, "_vs_")
+  exp <- split[[1]][1]
+  
+  downGenesFile <- str_interp("deseq/output/${pair}_significantly_downregulated_genes.csv")
+  downGenes <- as.data.frame(read.csv(downGenesFile, sep = ",", header = TRUE, row.names = 1))
+  key = str_interp("${exp}_sig_downreg_genes")
+  downregUpsetListInput[[key]] = rownames(downGenes)
+  
+  if (first_pair == TRUE) {
+    consistent_down_genes = rownames(downGenes)
+    first_pair = FALSE
+  } else {
+    consistent_down_genes = intersect(consistent_down_genes, rownames(downGenes))
+  }
+}
+
+upset(fromList(downregUpsetListInput), nsets = 7, nintersects = 50, order.by = "degree")
+
+print("Genes downregulated in all sensitive/resistant pairs")
+print(consistent_down_genes)
+```
+
+Output the lists of genes corresponding to each column of the upset plot
+
+```{r downregulated upset plot data isolines}
+downregUpsetPlotGenes.df <- getUpsetPlotData(downregUpsetListInput)
+write.csv(downregUpsetPlotGenes.df, file = "deseq/output/upset_plot_isolines_lists_significantly_downregulated_genes.csv")
+downregUpsetPlotGenes.df
+```
+
+
+
+### Upset plots across isolines
+
+Gene included in isoline if it is sig upregulated in ANY of the cell lines
+
+```{r upreg upset by isoline any}
+upsetListInput <- vector(mode="list", length=length(isolines))
+
+for (isoline in unique(isolines$isoline)) {
+  pairs = isolines[isolines$isoline == isoline, "pair"]
+  upGenes <- list()
+  
+  for (pair in pairs) {
+    upGenesFile = str_interp("deseq/output/${pair}_significantly_upregulated_genes.csv")
+    newUpGenes <- as.data.frame(read.csv(upGenesFile, sep = ",", header = TRUE, row.names = 1))
+    upGenes <- unique(c(upGenes, rownames(newUpGenes)))
+  }
+  
+  upsetListInput[[isoline]] = upGenes
+}
+
+upset(fromList(upsetListInput), nsets = 7, nintersects = 50, order.by = "degree")
+
+# Output the lists of genes corresponding to each column of the upset plot
+upregUpsetPlotGenes.df <- getUpsetPlotData(upsetListInput)
+write.csv(upregUpsetPlotGenes.df, file = "deseq/output/upset_plot_isolines_lists_significantly_upregulated_genes_any_sublines.csv")
+upregUpsetPlotGenes.df
+```
+
+Gene included in isoline if it is sig upregulated in ALL of the cell lines
+
+```{r upreg upset by isoline all}
+upsetListInput <- vector(mode="list", length=length(isolines))
+
+for (isoline in unique(isolines$isoline)) {
+  pairs = isolines[isolines$isoline == isoline, "pair"]
+  
+  pair = pairs[1]
+  upGenesFile = str_interp("deseq/output/${pair}_significantly_upregulated_genes.csv")
+  upGenes <- as.data.frame(read.csv(upGenesFile, sep = ",", header = TRUE, row.names = 1))
+  upGenes <- rownames(upGenes)
+  
+  if (length(pairs) > 1) {
+    for (pair in pairs[2:length(pairs)]) {
+      upGenesFile = str_interp("deseq/output/${pair}_significantly_upregulated_genes.csv")
+      newUpGenes <- as.data.frame(read.csv(upGenesFile, sep = ",", header = TRUE, row.names = 1))
+      upGenes <- intersect(upGenes, rownames(newUpGenes))
+    }
+  }
+  
+  upsetListInput[[isoline]] = upGenes
+}
+
+upset(fromList(upsetListInput), nsets = 7, nintersects = 50, order.by = "degree")
+
+# Output the lists of genes corresponding to each column of the upset plot
+upregUpsetPlotGenes.df <- getUpsetPlotData(upsetListInput)
+write.csv(upregUpsetPlotGenes.df, file = "deseq/output/upset_plot_isolines_lists_significantly_upregulated_genes_all_sublines.csv")
+upregUpsetPlotGenes.df
+```
+
+Gene included in isoline if it is sig downregulated in ANY of the cell lines
+
+```{r downreg upset by isoline any}
+upsetListInput <- vector(mode="list", length=length(isolines))
+
+for (isoline in unique(isolines$isoline)) {
+  pairs = isolines[isolines$isoline == isoline, "pair"]
+  downGenes <- list()
+  
+  for (pair in pairs) {
+    downGenesFile = str_interp("deseq/output/${pair}_significantly_downregulated_genes.csv")
+    newDownGenes <- as.data.frame(read.csv(downGenesFile, sep = ",", header = TRUE, row.names = 1))
+    downGenes <- unique(c(downGenes, rownames(newDownGenes)))
+  }
+  
+  upsetListInput[[isoline]] = downGenes
+}
+
+upset(fromList(upsetListInput), nsets = 7, nintersects = 50, order.by = "degree")
+
+# Output the lists of genes corresponding to each column of the upset plot
+downregUpsetPlotGenes.df <- getUpsetPlotData(upsetListInput)
+write.csv(downregUpsetPlotGenes.df, file = "deseq/output/upset_plot_isolines_lists_significantly_downregulated_genes_any_sublines.csv")
+downregUpsetPlotGenes.df
+```
+
+Gene included in isoline if it is sig downregulated in ALL of the cell lines
+
+```{r downreg upset by isoline all}
+upsetListInput <- vector(mode="list", length=length(isolines))
+
+for (isoline in unique(isolines$isoline)) {
+  pairs = isolines[isolines$isoline == isoline, "pair"]
+  
+  pair = pairs[1]
+  downGenesFile = str_interp("deseq/output/${pair}_significantly_downregulated_genes.csv")
+  downGenes <- as.data.frame(read.csv(downGenesFile, sep = ",", header = TRUE, row.names = 1))
+  downGenes <- rownames(downGenes)
+  
+  if (length(pairs) > 1) {
+    for (pair in pairs[2:length(pairs)]) {
+      downGenesFile = str_interp("deseq/output/${pair}_significantly_downregulated_genes.csv")
+      newDownGenes <- as.data.frame(read.csv(downGenesFile, sep = ",", header = TRUE, row.names = 1))
+      downGenes <- intersect(downGenes, rownames(newDownGenes))
+    }
+  }
+  
+  upsetListInput[[isoline]] = downGenes
+}
+
+upset(fromList(upsetListInput), nsets = 7, nintersects = 50, order.by = "degree")
+
+# Output the lists of genes corresponding to each column of the upset plot
+downregUpsetPlotGenes.df <- getUpsetPlotData(upsetListInput)
+write.csv(downregUpsetPlotGenes.df, file = "deseq/output/upset_plot_isolines_lists_significantly_downregulated_genes_all_sublines.csv")
+upregUpsetPlotGenes.df
+```
+
+
+### Upregulated pathway upset plot
+
+Shows only the upregulated pathways.
+
+```{r upreg path upset plot}
+upregUpsetListInput <- vector(mode="list", length=length(sensitive_resistant_pairs))
+for (pair in sensitive_resistant_pairs) {
+  split <- strsplit(pair, "_vs_")
+  cont <- split[[1]][2]
+  exp <- split[[1]][1]
+  
+  upPathwaysFile <- str_interp("deseq/output/${exp}_vs_${cont}_significantly_upregulated_pathways.csv")
+  upPathways <- as.data.frame(read.csv(upPathwaysFile, sep = ",", header = TRUE, row.names = 1))
+  key = str_interp("${exp}_sig_upreg_pathways")
+  upregUpsetListInput[[key]] = upPathways$Description
+}
+
+upset(fromList(upregUpsetListInput), nsets = 7, nintersects = 50, order.by = "degree")
+```
+
+Output the lists of pathways corresponding to each column of the upset plot
+
+```{r upregulated path upset plot data}
+fromList(upregUpsetListInput)
+upregUpsetPlotPathways.df <- getUpsetPlotData(upregUpsetListInput)
+write.csv(upregUpsetPlotPathways.df, file = "deseq/output/upset_plot_lists_significantly_upregulated_pathways.csv")
+upregUpsetPlotPathways.df
+```
+
+### Downregulated pathway upset plot
+
+Shows only the downregulated pathways.
+
+```{r downreg path upset plot}
+downregUpsetListInput <- vector(mode="list", length=length(sensitive_resistant_pairs))
+for (pair in sensitive_resistant_pairs) {
+  split <- strsplit(pair, "_vs_")
+  cont <- split[[1]][2]
+  exp <- split[[1]][1]
+  
+  downPathwaysFile <- str_interp("deseq/output/${exp}_vs_${cont}_significantly_downregulated_pathways.csv")
+  downPathways <- as.data.frame(read.csv(downPathwaysFile, sep = ",", header = TRUE, row.names = 1))
+  key = str_interp("${exp}_sig_downreg_pathways")
+  downregUpsetListInput[[key]] = downPathways$Description
+}
+
+upset(fromList(downregUpsetListInput), nsets = 7, nintersects = 50, order.by = "degree")
+```
+
+Output the lists of pathways corresponding to each column of the upset plot
+
+```{r downregulated path upset plot data}
+fromList(downregUpsetListInput)
+downregUpsetPlotPathways.df <- getUpsetPlotData(downregUpsetListInput)
+write.csv(downregUpsetPlotPathways.df, file = "deseq/output/upset_plot_lists_significantly_downregulated_pathways.csv")
+downregUpsetPlotPathways.df
+```
+
+Read in platinum mechanism data
+```{r}
+platinumGeneData <- as.data.frame(read.table("deseq/specific-pathways/platinum-list-all-mechanisms.txt", sep = "\n", header = TRUE))
+row.names(platinumGeneData) <- platinumGeneData[,1]
+
+platinumGeneData
+```
+
+## Visualizing differential genes across sensitive/resistant pairs
+
+Shows gene expression across sensitive/resistant pairs. Includes genes that are consistently regulated in at least 3 sensitive/resistant pairs. Uses a mean-centered approach.
+
+```{r}
+consistentlyRegulatedGenes = rownames(full_results_genes[full_results_genes$num_pairs_sig_regulated > 2, ])
+
+dds.all <- DESeqDataSetFromMatrix(countData = countmatrix.all, colData = metadata.all, design = ~ CellLine + Replicate)
+
+annotation_col <- as.data.frame(colData(dds.all)[,c("Resistant", "IsoLine")])
+annotation_col$Resistant <- as.factor(annotation_col$Resistant)
+annotation_col$IsoLine <- as.factor(annotation_col$IsoLine)
+annotation_col <- as.data.frame(annotation_col)
+
+select <- TPM.log[rownames(TPM.log) %in% consistentlyRegulatedGenes,]
+
+mat <- as.matrix(select)
+mat <- mat - rowMeans(mat)
+pheatmap(mat,
+  cluster_rows = TRUE,
+  cluster_cols = FALSE,
+  show_rownames = FALSE,
+  labels_col = colnames(select),
+  annotation_col = annotation_col,
+  legend = TRUE,
+  cellwidth = 5,
+  fontsize = 5,
+  fontsize_row = 2,
+  border_color=NA
+)
+```

@@ -1,0 +1,863 @@
+---
+title: "Secondary analysis of 230324-3way-merge RNA-seq sensitive vs resistant cell lines across several isolines"
+output: html_notebook
+---
+  
+## Introduction  
+
+Goal: to compare the difference in transcription factor enrichment between sensitive and resistant cell lines across three different tumor lines.
+
+RNA-seq was run for three isogenic tumor cell lines (ex: OVCAR3, OVCAR3A, OVCAR3B) across several isolines
+Sample preparation was performed in Dr. Lang's lab. Preparation of cells and RNA extraction was done by Kendra, Josie, and Sydney.
+RNA seq library prep was done by Kristen.
+
+This notebook is based on [this training](https://hbctraining.github.io/DGE_workshop/lessons/08_DGE_LRT.html) and a discussion with Avtar.
+
+Biological Questions:
+
+ * How does transcription factor enrichment differ between these cellines?
+ * How does transcription factor enrichment differ between the sensitive and resistant cell lines?
+ * How does transcription factor enrichment differ between the sensitive and resistant cell lines across isogenic lines
+
+## Inputs
+
+```{r load packages, include=FALSE}
+library(tidyverse)
+library(readxl)
+library(DESeq2)
+library(vsn)
+library(pheatmap)
+library(RColorBrewer)
+library(ggrepel)
+library(biomaRt)
+library(DESeqAnalysis)
+library(DEGreport)
+library(UpSetR)
+library(gprofiler2)
+library(rrvgo)
+library(GO.db)
+library(readxl)
+library(rlist)
+GO <- as.list(GOTERM)
+```
+
+Define upset plot helper functions (code from https://github.com/hms-dbmi/UpSetR/issues/85#issuecomment-415480954)
+```{r include=FALSE}
+overlapGroups <- function (listInput, sort = TRUE) {
+  # listInput could look like this:
+  # $one
+  # [1] "a" "b" "c" "e" "g" "h" "k" "l" "m"
+  # $two
+  # [1] "a" "b" "d" "e" "j"
+  # $three
+  # [1] "a" "e" "f" "g" "h" "i" "j" "l" "m"
+  listInputmat    <- fromList(listInput) == 1
+  #     one   two three
+  # a  TRUE  TRUE  TRUE
+  # b  TRUE  TRUE FALSE
+  #...
+  # condensing matrix to unique combinations elements
+  listInputunique <- unique(listInputmat)
+  grouplist <- list()
+  # going through all unique combinations and collect elements for each in a list
+  for (i in 1:nrow(listInputunique)) {
+    currentRow <- listInputunique[i,]
+    myelements <- which(apply(listInputmat,1,function(x) all(x == currentRow)))
+    attr(myelements, "groups") <- currentRow
+    grouplist[[paste(colnames(listInputunique)[currentRow], collapse = ":")]] <- myelements
+    myelements
+    # attr(,"groups")
+    #   one   two three 
+    # FALSE FALSE  TRUE 
+    #  f  i 
+    # 12 13 
+  }
+  if (sort) {
+    grouplist <- grouplist[order(sapply(grouplist, function(x) length(x)), decreasing = TRUE)]
+  }
+  attr(grouplist, "elements") <- unique(unlist(listInput))
+  return(grouplist)
+}
+
+getUpsetPlotData <- function(listInput) {
+  # listInput could look like this:
+  # $one
+  # [1] "a" "b" "c" "e" "g" "h" "k" "l" "m"
+  # $two
+  # [1] "a" "b" "d" "e" "j"
+  # $three
+  # [1] "a" "e" "f" "g" "h" "i" "j" "l" "m"
+  upsetPlotData.messy <- overlapGroups(listInput)
+  upsetPlotData <- purrr::map(upsetPlotData.messy, ~ attr(upsetPlotData.messy, "elements")[.x])
+  # Adds NA values until each is the same length so we can format in a data frame
+  upsetPlotData.df <- as.data.frame(lapply(upsetPlotData, `length<-`, max(lengths(upsetPlotData))))
+  return(upsetPlotData.df)
+}
+```
+
+## Gather and organize raw data
+
+Setup metadata tables.
+
+```{r load metatable}
+metadata.all <- as.data.frame(read.table("../deseq/metadata.csv", sep = ",", header = TRUE))
+rownames(metadata.all) <- metadata.all$ShortName
+# TODO: This should be incorporated into the metadata file. Just doing this out of laziness
+for (row in 1:nrow(metadata.all)) {
+    isogenicRank <- 1
+    resistant <- 0
+    if (metadata.all$CellLine[row] %in% list("OVCAR3A", "OVCAR4A", "PEA2", "PEO4")) {
+      isogenicRank <- 2
+      resistant <- 1
+    } else if (metadata.all$CellLine[row] %in% list("OVCAR3B", "OVCAR4B", "PEO6")) {
+      isogenicRank <- 3
+      resistant <- 1
+    }
+    metadata.all$IsogenicRank[row] <- isogenicRank
+    metadata.all$Resistant[row] <- resistant
+}
+metadata.all$CellLine <- as.factor(metadata.all$CellLine)
+metadata.all$IsogenicRank <- as.factor(metadata.all$IsogenicRank)
+metadata.all$Resistant <- as.factor(metadata.all$Resistant)
+metadata.all
+
+sensitive_resistant_pairs <- c("OVCAR3A_vs_OVCAR3", "OVCAR3B_vs_OVCAR3", "OVCAR4A_vs_OVCAR4", "OVCAR4B_vs_OVCAR4", "PEA2_vs_PEA1", "PEO6_vs_PEO1", "PEO4_vs_PEO1")
+```
+
+Load Count matrix
+
+```{r read count matrix}
+countmatrix <- as.matrix(read.table("../../star_salmon/salmon.merged.gene_counts.tsv", sep = "\t", header = TRUE))
+row.names(countmatrix) <- countmatrix[, "gene_name"]
+countmatrix <- countmatrix[, 3:ncol(countmatrix)]
+countmatrix.all <- matrix(as.numeric(countmatrix), ncol = ncol(countmatrix), dimnames = list(rownames(countmatrix), colnames(countmatrix)))
+countmatrix.all <- round(countmatrix.all)
+countmatrix.all <- countmatrix.all[, metadata.all$LongName]
+colnames(countmatrix.all) <- metadata.all$ShortName[match(colnames(countmatrix.all), metadata.all$LongName)] # Renames the Salmon countmatrix using formatted short name
+```
+
+<!-- ## Creates a separate generated notebook file for each individual isoline. -->
+
+<!-- ```{r individual isoline notebooks, results = FALSE} -->
+<!-- for (isoline in unique(metadata.all$IsoLine)) { -->
+<!--   cont <- unique(metadata.all[metadata.all$IsoLine == isoline & metadata.all$Resistant == 0, "CellLine"]) -->
+<!--   exps <- unique(metadata.all[metadata.all$IsoLine == isoline & metadata.all$Resistant == 1, "CellLine"]) -->
+<!--   # Creates another notebook that shares the same environment -->
+<!--   outFile <- str_interp("generated-notebooks/magic-analysis-${isoline}.html") -->
+<!--   rmarkdown::render('single-isoline-magic-analysis.Rmd',  -->
+<!--                     output_file = outFile,  -->
+<!--                     params = list(isoline = isoline,  -->
+<!--                                   controlCellLine = cont,  -->
+<!--                                   experimentalCellLines = exps, -->
+<!--                                   countmatrix.all = countmatrix.all, -->
+<!--                                   metadata.all = metadata.all)) -->
+<!-- } -->
+<!-- ``` -->
+
+## Creates a separate generated notebook file for each sensitive-resistant pair.
+
+```{r individual pair notebooks, results = FALSE}
+for (pair in sensitive_resistant_pairs) {
+  split <- strsplit(pair, "_vs_")
+  cont <- split[[1]][2]
+  exp <- split[[1]][1]
+  
+  # Creates another notebook that shares the same environment
+  outFile <- str_interp("generated-notebooks/magic-analysis-${pair}.html")
+  print(str_interp("Creating notebook for ${exp} vs ${cont}"))
+  rmarkdown::render('single-sensitive-resistant-pair-magic-analysis.Rmd', 
+                    output_file = outFile, 
+                    params = list(controlCellLine = cont, 
+                                  experimentalCellLine = exp,
+                                  countmatrix.all = countmatrix.all,
+                                  metadata.all = metadata.all))
+}
+```
+
+## Analyze all samples together
+
+Create a cls file with cell line categorization information
+
+```{r create cls file}
+possible_categories <- unique(metadata.all$CellLine)
+assigned_categories <- metadata.all$CellLine
+num_categories <- length(possible_categories)
+num_samples <- length(assigned_categories)
+
+fileConn<-file("data/all_celllines.cls")
+writeLines(
+  c(
+    str_interp("${num_samples}\t${num_categories}\t1"),
+    str_interp("#\t${paste(possible_categories, collapse='\t')}"),
+    str_interp("${paste(assigned_categories, collapse='\t')}")),
+  fileConn)
+close(fileConn)
+```
+
+## Filter out low-read genes to create our background gene set
+
+Only retain genes for which there is a cell line that had at least 1 read for the gene in all of its replicates
+
+```{r all background genes}
+str_interp("${nrow(countmatrix.all)} genes before filtration.")
+countmatrix.all.df <- as.data.frame(countmatrix.all)
+for(row in 1:nrow(countmatrix.all.df)) {
+  keepGene <- FALSE
+  
+  # for at least one of the cell lines
+  for (cellline in unique(metadata.all$CellLine)) {
+    allRead <- TRUE
+    
+    # all of the replicates must have at least one read
+    for(i in 1:3) {
+      sampleName <- str_interp("${cellline}_R${i}")
+      if (countmatrix.all.df[row, sampleName] < 1) {
+        allRead <- FALSE
+      }
+    }
+    
+    if (allRead) {
+      keepGene <- TRUE
+    }
+  }
+  
+  if (keepGene) {
+    countmatrix.all.df$SufficientReads[row] <- TRUE
+  } else {
+    countmatrix.all.df$SufficientReads[row] <- FALSE
+  }
+}
+
+countmatrix.all.filtered <- countmatrix.all.df %>%
+  filter(SufficientReads)
+
+str_interp("${nrow(countmatrix.all.filtered)} genes after filtration.")
+
+backgroundGenes.all <- rownames(countmatrix.all.filtered)
+```
+
+## Differential expression analysis
+
+Run Deseq on the data set.
+
+```{r setup deseq all}
+# Having the replicate number in the design makes it a paired design
+dds.all <- DESeqDataSetFromMatrix(
+  countData = countmatrix.all,
+  colData = metadata.all,
+  # design = ~ CellLine + Replicate + Resistant)
+  design = ~ CellLine + Replicate)
+```
+
+Using a Likelihood Ratio Test rather than the Wald test allows us to analyze all cellLines at once (rather than analyzing them pair-wise). P-values are determined only by the difference in performance of the full and reduced models. This answers whether the cell line explains a significant amount of variation in the gene expression. We can then examine all cell lines together.
+
+```{r all deseq}
+# Full model includes  Replicate + CellLine; Reduced model only includes Replicate
+dds.all <- DESeq(dds.all, test="LRT",
+                 reduced = ~ Replicate)
+                 # reduced = ~ CellLine + Replicate)
+```
+
+## Filter and normalize deseq output
+
+Filter out the low read genes that are not included in our background gene list.
+```{r ovcar filter deseq}
+# Filter (recalculates p-adjusted values automatically)
+dds.all.filtered <- subset(dds.all, rownames(dds.all) %in% backgroundGenes.all)
+
+# Pull out results
+res.all.lrt.filtered <- results(dds.all.filtered)
+res.all.lrt.filtered <- as.data.frame(res.all.lrt.filtered[order(res.all.lrt.filtered$padj, decreasing = FALSE),])
+
+as.data.frame(res.all.lrt.filtered)
+
+# Pull out only significant results
+sig.res.all.lrt.filtered <- res.all.lrt.filtered %>% filter(padj < 0.05)
+sig.res.all.lrt.filtered
+
+# Subset the dds for significant results
+sigGenes.all <- rownames(sig.res.all.lrt.filtered)
+dds.all.filtered.sig <- subset(dds.all.filtered, rownames(dds.all.filtered) %in% sigGenes.all)
+```
+
+Normalize the data using the median of ratios method and vst methods. Chosen based on [this training](https://nbisweden.github.io/workshop-RNAseq/1906/lab_dge.html)
+
+```{r normalize the data}
+# Normalize using the median of ratios method, which incorporates sequencing depth and compositional bias
+normalized_counts.all.filtered <- counts(dds.all.filtered, normalized=TRUE)
+normalized_counts.all.lrt.filtered.sig <- counts(dds.all.filtered.sig, normalized=TRUE)
+as.data.frame(counts(dds.all.filtered)) # non-normalized
+as.data.frame(normalized_counts.all.filtered) # normalized
+
+write.table(
+  as.data.frame(normalized_counts.all.filtered),
+  file="data/all_filtered_normalized_counts.txt",
+  sep="\t",
+  quote=F,
+  col.names=NA)
+
+write.table(
+  as.data.frame(normalized_counts.all.lrt.filtered.sig),
+  file="data/all_filtered_sig_normalized_counts.txt",
+  sep="\t",
+  quote=F,
+  col.names=NA)
+
+# Normalize using vst, which results in similar variance across samples. This is needed for PCA analysis
+vst.dds.all.filtered <- vst(dds.all.filtered)
+vst.dds.all.filtered.sig <- vst(dds.all.filtered.sig) # TODO: Should I take vst of significant peaks or subset the significant peaks from the vst of full data?
+```
+
+## PCA Plots
+
+All background genes. This plots the vst of the counts.
+
+```{r normalized PCA - all background genes}
+pcaData <- plotPCA(vst.dds.all.filtered, intgroup = c("CellLine", "ShortName"), returnData = TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+ggplot(pcaData, aes(PC1, PC2, color = CellLine, label = ShortName)) +
+  geom_point(size = 3) +
+  geom_text(hjust = 0, vjust = 0) +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  coord_fixed()
+```
+
+Only significant genes. This plots the vst of the counts.
+
+```{r normalized PCA - only significant for resistance genes}
+pcaData <- plotPCA(vst.dds.all.filtered.sig, intgroup = c("CellLine", "ShortName"), returnData = TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+ggplot(pcaData, aes(PC1, PC2, color = CellLine, label = ShortName)) +
+  geom_point(size = 3) +
+  geom_text(hjust = 0, vjust = 0) +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  coord_fixed()
+```
+
+# Cluster using Leiden clustering (script courtesy of Avtar)
+
+`python scripts/Leiden_cluster_genes.py`
+Provide the files  `data/all_filtered_sig_normalized_counts.txt` and `data/all_celllines.cls`
+When prompted, select "yes" for centering the data and using means of conditions. Select "no" for taking a subset of the significant genes (we have already performed this subset). Default resolution is fine.
+ 
+Copy output into gene_clusters folder: 
+`cp data/all_filtered_sig_normalized_counts_clusters/clusters_centered.pdf gene_clusters/all_gene_clusters_centered.pdf`
+`cp data/all_filtered_sig_normalized_counts_clusters/gene_cluster_lists.TSV gene_clusters/all_gene_cluster_s_centered.pdf_lists.TSV`
+
+This was for all isolines as well as the full data set. We will be examining the isogenic lines individually using Magic. We used a resolution of 0.1 to maximize coherent clustering
+
+# Analyze clusters across sensitive-resistant pairs
+
+## Create the magic input
+
+```{r create magic input}
+for (pair in sensitive_resistant_pairs) {
+  
+  
+  # Load the differential results
+  loaded_to <- load(str_interp("Rdata/${pair}_res_filtered.RData"))
+  pair.differential.results <- get(loaded_to)
+  pair.differential.results$gene <- rownames(pair.differential.results)
+  
+  print(pair)
+  print(pair.differential.results[order(pair.differential.results$padj),])
+  
+  # Separate up and down genes
+  pair_up_genes <- pair.differential.results %>% filter(log2FoldChange > 0 & padj < 0.05)
+  pair_down_genes <- pair.differential.results %>% filter(log2FoldChange < 0 & padj < 0.05)
+
+  # Read in background genes
+  pair_filtered_normalized_counts <- as.data.frame(read.table(str_interp("data/${pair}_filtered_normalized_counts.txt"),
+                                                                sep = "\t",
+                                                                header = TRUE,
+                                                                row.names = 1))
+  pair_background_genes <- row.names(pair_filtered_normalized_counts)
+  pair_up_genes <- pair_up_genes$gene[order(pair_up_genes$gene)]
+  pair_down_genes <- pair_down_genes$gene[order(pair_down_genes$gene)]
+
+  # Combine to form magic input
+  pair_magic_input <- data.frame(background_genes = pair_background_genes)
+  pair_magic_input[1:length(pair_up_genes), "up_in_resistant"] <- pair_up_genes
+  pair_magic_input[1:length(pair_down_genes), "down_in_resistant"] <- pair_down_genes
+
+  print(pair_magic_input)
+
+  write.table(pair_magic_input,
+              file = str_interp("data/${pair}_magic_input.txt"),
+              quote = FALSE,
+              row.names = FALSE,
+              na = "",
+              sep = "\t")
+}
+```
+
+<!-- # Analyze clusters across all isolines -->
+
+<!-- ## Select the groups that are deemed "interesting" -->
+
+<!-- Manually selected all resistant lines going up or all resistant lines going down, considering error bars -->
+
+<!-- ```{r interesting clusters} -->
+<!--   OVCAR3_up_groups <- c("green", "black") -->
+<!--   OVCAR3_down_groups <- c("purple", "indigo", "grey") -->
+<!--   OVCAR4_up_groups <- c("red", "green") -->
+<!--   OVCAR4_down_groups <- c("brown", "black", "grey") -->
+<!--   PEO_up_groups <- c("blue", "green") -->
+<!--   PEO_down_groups <- c("red", "brown", "skyblue") -->
+<!--   PEA_up_groups <- c("grey") -->
+<!--   PEA_down_groups <- c("brown", "black", "teal", "aqua", "lime") -->
+<!-- ``` -->
+
+<!-- ## Create the magic input -->
+
+<!-- ```{r create magic input} -->
+<!-- for (isoline in c("OVCAR3", "OVCAR4", "PEA", "PEO")) { -->
+<!--   isoline_up_groups <- get(str_interp("${isoline}_up_groups")) -->
+<!--   isoline_down_groups <- get(str_interp("${isoline}_down_groups")) -->
+<!--   isoline_clusters <- as.data.frame(read.table(str_interp("gene_clusters/${isoline}_res0.1_gene_clusters_lists.TSV"), -->
+<!--                                               sep = "\t", -->
+<!--                                               header = TRUE)) -->
+<!--   # Combine up clusters -->
+<!--   isoline_up_genes <- data.frame(up_in_resistant = unlist(isoline_clusters[, isoline_up_groups])) -->
+<!--   row.names(isoline_up_genes) <- NULL -->
+<!--   colnames(isoline_up_genes) <- c("up_in_resistant") -->
+<!--   isoline_up_genes <- isoline_up_genes[isoline_up_genes$up_in_resistant != "",] -->
+
+<!--   # Combine down clusters -->
+<!--   isoline_down_genes <- data.frame(down_in_resistant = unlist(isoline_clusters[, isoline_down_groups])) -->
+<!--   row.names(isoline_down_genes) <- NULL -->
+<!--   colnames(isoline_down_genes) <- c("down_in_resistant") -->
+<!--   isoline_down_genes <- isoline_down_genes[isoline_down_genes$down_in_resistant != "",] -->
+
+<!--   # Read in background genes -->
+<!--   isoline_filtered_normalized_counts <- as.data.frame(read.table(str_interp("data/${isoline}_filtered_normalized_counts.txt"), -->
+<!--                                                                 sep = "\t", -->
+<!--                                                                 header = TRUE, -->
+<!--                                                                 row.names = 1)) -->
+<!--   isoline_background_genes <- row.names(isoline_filtered_normalized_counts) -->
+
+<!--   # Combine to form magic input -->
+<!--   isoline_magic_input <- data.frame(background_genes = isoline_background_genes) -->
+<!--   isoline_magic_input[1:length(isoline_up_genes), "up_in_resistant"] <- isoline_up_genes -->
+<!--   isoline_magic_input[1:length(isoline_down_genes), "down_in_resistant"] <- isoline_down_genes -->
+
+<!--   write.table(isoline_magic_input, -->
+<!--               file = str_interp("data/${isoline}_magic_input.txt"), -->
+<!--               quote = FALSE, -->
+<!--               row.names = FALSE, -->
+<!--               na = "", -->
+<!--               sep = "\t") -->
+<!-- } -->
+<!-- ``` -->
+
+# Run Magic
+
+## Use the `run_magic.sh` script.
+
+## Combining magic output
+"The Score combines the corrected p value from this test and a measure of how skewed the chip signals are towards high values in the query versus background lists"
+
+### Combine per sensitive-resistant pair
+
+```{r combine magic output}
+all_sig_up_across_pairs_tfs <- c()
+all_sig_down_across_pairs_tfs <- c()
+
+# Read in magic output for each pair
+for (pair in sensitive_resistant_pairs) {
+  for (dir in c("up", "down")) {
+    pair_tfs <- as.data.frame(
+                        read_excel(
+                          str_interp("magic_output/${pair}_output/${dir}_in_resistant/${dir}_in_resistant_summary.xlsx")))
+    pair_tfs <- pair_tfs[pair_tfs$padj < 0.5,] # If padj > 0.5 then this isn't really up
+    pair_tfs_sig <- pair_tfs[pair_tfs$padj < 0.05,]
+  
+    assign(str_interp("${pair}_${dir}_tfs"), pair_tfs, pos = 1)
+    assign(str_interp("${pair}_${dir}_tfs_sig"), pair_tfs_sig, pos = 1)
+    
+    if (dir == "up") {
+      all_sig_up_across_pairs_tfs <- list.append(all_sig_up_across_pairs_tfs, pair_tfs_sig$TF)
+    } else if (dir == "down") {
+      all_sig_down_across_pairs_tfs <- list.append(all_sig_down_across_pairs_tfs, pair_tfs_sig$TF)
+    } else {
+      print(str_interp("ISSUE! dir not valid: ${dir}"))
+    }
+  }
+}
+
+# All tfs that are significant in at least one isoline
+combined_magic_output_sig_down <- data.frame(TF = unique(all_sig_down_across_pairs_tfs))
+combined_magic_output_sig_up <- data.frame(TF = unique(all_sig_up_across_pairs_tfs))
+
+for (pair in sensitive_resistant_pairs) {
+  pair_up_tfs <- get(str_interp("${pair}_up_tfs"))
+  pair_addition_up <- data.frame(pair_up_tfs$TF,
+                                    pair_up_tfs$Score,
+                                    pair_up_tfs$padj)
+
+  colnames(pair_addition_up) <- c("TF",
+                                    str_interp("${pair}_up_score"),
+                                    str_interp("${pair}_up_padj"))
+
+  pair_down_tfs <- get(str_interp("${pair}_down_tfs"))
+
+  pair_addition_down <- data.frame(pair_down_tfs$TF,
+                                      pair_down_tfs$Score,
+                                      pair_down_tfs$padj)
+
+  colnames(pair_addition_down) <- c("TF",
+                                      str_interp("${pair}_down_score"),
+                                      str_interp("${pair}_down_padj"))
+
+  # Add the info for up and down across all pairs regardless of significance
+  if (nrow(pair_addition_up) > 0) {
+    combined_magic_output_sig_up <- left_join(combined_magic_output_sig_up,
+                                              pair_addition_up,
+                                              by = "TF")
+    combined_magic_output_sig_down <- left_join(combined_magic_output_sig_down,
+                                                pair_addition_up,
+                                                by = "TF")
+  }
+
+  if (nrow(pair_addition_down) > 0) {
+    combined_magic_output_sig_up <- left_join(combined_magic_output_sig_up,
+                                              pair_addition_down,
+                                              by = "TF")
+    combined_magic_output_sig_down <- left_join(combined_magic_output_sig_down,
+                                                pair_addition_down,
+                                                by = "TF")
+  }
+}
+
+# Count the number of isolines that were significantly up/down in each TF
+for (row in 1:nrow(combined_magic_output_sig_up)) {
+  num_sig_up <- 0
+  for (pair in sensitive_resistant_pairs) {
+    col_name <- paste0(pair, "_up_padj")
+    padj <- combined_magic_output_sig_up[row, col_name]
+    if (!is.na(padj) & padj < 0.05) {
+      num_sig_up <- num_sig_up + 1
+    }
+  }
+
+  num_sig_down <- 0
+  for (pair in sensitive_resistant_pairs) {
+    col_name <- paste0(pair, "_down_padj")
+    padj <- combined_magic_output_sig_up[row, col_name]
+    if (!is.na(padj) & padj < 0.05) {
+      num_sig_down <- num_sig_down + 1
+    }
+  }
+
+  combined_magic_output_sig_up[row, "num_pairs_sig_up"] <- num_sig_up
+  combined_magic_output_sig_up[row, "num_pairs_sig_down"] <- num_sig_down
+}
+
+# Count the number of isolines that were significantly up/down in each TF
+for (row in 1:nrow(combined_magic_output_sig_down)) {
+  num_sig_up <- 0
+  for (pair in sensitive_resistant_pairs) {
+    col_name <- paste0(pair, "_up_padj")
+    padj <- combined_magic_output_sig_down[row, col_name]
+    if (!is.na(padj) & padj < 0.05) {
+      num_sig_up <- num_sig_up + 1
+    }
+  }
+
+  num_sig_down <- 0
+  for (pair in sensitive_resistant_pairs) {
+    col_name <- paste0(pair, "_down_padj")
+    padj <- combined_magic_output_sig_down[row, col_name]
+    if (!is.na(padj) & padj < 0.05) {
+      num_sig_down <- num_sig_down + 1
+    }
+  }
+
+  combined_magic_output_sig_down[row, "num_pairs_sig_up"] <- num_sig_up
+  combined_magic_output_sig_down[row, "num_pairs_sig_down"] <- num_sig_down
+}
+
+# Reorder columns
+col_names <- c("TF", "num_pairs_sig_up", "num_pairs_sig_down")
+for (dir in c("up", "down")) {
+  for (pair in sensitive_resistant_pairs) {
+    col_name <- paste0(pair, "_", dir, "_score")
+    col_names <- append(col_names, col_name)
+    col_name <- paste0(pair, "_", dir, "_padj")
+    col_names <- append(col_names, col_name)
+  }
+}
+
+rownames(combined_magic_output_sig_up) <- combined_magic_output_sig_up$TF
+combined_magic_output_sig_up <- combined_magic_output_sig_up[, col_names]
+
+rownames(combined_magic_output_sig_down) <- combined_magic_output_sig_down$TF
+combined_magic_output_sig_down <- combined_magic_output_sig_down[, col_names]
+
+# Sort by num significant
+combined_magic_output_sig_up <- combined_magic_output_sig_up[order(combined_magic_output_sig_up$num_pairs_sig_up, decreasing=TRUE),]
+combined_magic_output_sig_down <- combined_magic_output_sig_down[order(combined_magic_output_sig_down$num_pairs_sig_down, decreasing=TRUE),]
+
+# Tables include TF info across all isolines for each tf that is up/down regulated significantly in at least one isoline
+print(combined_magic_output_sig_up)
+print(combined_magic_output_sig_down)
+
+write.table(combined_magic_output_sig_up,
+            file = str_interp("differential_tfs/combined_magic_output_up_sig_sensitive-resistant-pairs.txt"),
+            quote = FALSE,
+            row.names = FALSE,
+            na = "",
+            sep = "\t")
+
+write.table(combined_magic_output_sig_down,
+            file = str_interp("differential_tfs/combined_magic_output_down_sig_sensitive-resistant-pairs.txt"),
+            quote = FALSE,
+            row.names = FALSE,
+            na = "",
+            sep = "\t")
+```
+## Only consider unidirectional results.
+
+```{r}
+for (pair in sensitive_resistant_pairs) {
+  
+  pair_up_tfs_sig <- get(str_interp("${pair}_up_tfs_sig"))
+  pair_down_tfs_sig <- get(str_interp("${pair}_down_tfs_sig"))
+  
+  # Subset unidirectional results
+  pair_sig_up_only_tfs <- pair_up_tfs_sig[!(pair_up_tfs_sig$TF %in% pair_down_tfs_sig$TF), ]
+  pair_sig_down_only_tfs <- pair_down_tfs_sig[!(pair_down_tfs_sig$TF %in% pair_up_tfs_sig$TF), ]
+  
+  # Save R data
+  assign(str_interp("${pair}_sig_up_only_tfs"), pair_sig_up_only_tfs)
+  assign(str_interp("${pair}_sig_down_only_tfs"), pair_sig_down_only_tfs)
+  
+  # Write to file
+  write.table(pair_sig_up_only_tfs,
+            str_interp("differential_tfs/${pair}_tfs_only_sig_up.txt"),
+            quote = FALSE,
+            row.names = FALSE,
+            col.names = TRUE,
+            sep = "\t")
+  write.table(pair_sig_down_only_tfs,
+            str_interp("differential_tfs/${pair}_tfs_only_sig_down.txt"),
+            quote = FALSE,
+            row.names = FALSE,
+            col.names = TRUE,
+            sep = "\t")
+}
+```
+
+Create an upset plot of the TFs that were significant in either up or down expressed genes (but not both) within a given sensitive/resistant pair.
+
+```{r upset plot motifs}
+tf_list_names <- c()
+upset_list_input <- c()
+for (dir in c("up", "down")) {
+  for (pair in sensitive_resistant_pairs) {
+    name <- str_interp("${pair}_${dir}_only_tfs")
+    list <- get(str_interp("${pair}_sig_${dir}_only_tfs"))
+    tf_list_names <- append(tf_list_names, name)
+    upset_list_input[[length(upset_list_input)+1]] <- list$TF # notation necessary to add to list of lists
+  }
+}
+
+names(upset_list_input) <- tf_list_names
+
+upset_groups <- getUpsetPlotData(upset_list_input)
+print(upset_groups)
+write.table(upset_groups,
+            "differential_tfs/unidirectional_differential_tfs_by_sensitive-resistant-pairs_upset_plot.txt",
+            quote = FALSE,
+            row.names = FALSE,
+            col.names = TRUE,
+            na = "",
+            sep = "\t")
+
+upset(fromList(upset_list_input), nsets = 7, nintersects = 50, order.by = "degree", keep.order = TRUE, sets = tf_list_names)
+```
+
+<!-- ### Combine per isoline -->
+
+<!-- ```{r combine magic output} -->
+<!-- # Read in magic output for each isoline -->
+<!-- for (isoline in c("OVCAR3", "OVCAR4", "PEA", "PEO")) { -->
+<!--   isoline_up_tfs <- as.data.frame( -->
+<!--                       read_excel( -->
+<!--                         str_interp("magic_output/${isoline}_output/up_in_resistant/up_in_resistant_summary.xlsx"))) -->
+<!--   isoline_up_tfs <- isoline_up_tfs[isoline_up_tfs$padj < 0.5,] # If padj > 0.5 then this isn't really up -->
+<!--   isoline_up_tfs_sig <- isoline_up_tfs[isoline_up_tfs$padj < 0.05,] -->
+
+<!--   isoline_down_tfs <- as.data.frame( -->
+<!--                         read_excel( -->
+<!--                           str_interp("magic_output/${isoline}_output/down_in_resistant/down_in_resistant_summary.xlsx"))) -->
+<!--   isoline_down_tfs <- isoline_down_tfs[isoline_down_tfs$padj < 0.5,] # If padj > 0.5 then this isn't really down -->
+<!--   isoline_down_tfs_sig <- isoline_down_tfs[isoline_down_tfs$padj < 0.05,] -->
+
+<!--   assign(str_interp("${isoline}_up_tfs"), isoline_up_tfs, pos = 1) -->
+<!--   assign(str_interp("${isoline}_down_tfs"), isoline_down_tfs, pos = 1) -->
+<!--   assign(str_interp("${isoline}_up_tfs_sig"), isoline_up_tfs_sig, pos = 1) -->
+<!--   assign(str_interp("${isoline}_down_tfs_sig"), isoline_down_tfs_sig, pos = 1) -->
+<!-- } -->
+
+<!-- # All tfs that are significant in at least one isoline -->
+<!-- combined_magic_output_sig_down <- data.frame(TF = unique(list.append(OVCAR3_down_tfs_sig$TF, -->
+<!--                                                                      OVCAR4_down_tfs_sig$TF, -->
+<!--                                                                      PEO_down_tfs_sig$TF, -->
+<!--                                                                      PEA_down_tfs_sig$TF))) -->
+<!-- combined_magic_output_sig_up <- data.frame(TF = unique(list.append(OVCAR3_up_tfs_sig$TF, -->
+<!--                                                                    OVCAR4_up_tfs_sig$TF, -->
+<!--                                                                    PEO_up_tfs_sig$TF, -->
+<!--                                                                    PEA_up_tfs_sig$TF))) -->
+
+<!-- for (isoline in c("OVCAR3", "OVCAR4", "PEA", "PEO")) { -->
+<!--   isoline_up_tfs <- get(str_interp("${isoline}_up_tfs")) -->
+<!--   isoline_addition_up <- data.frame(isoline_up_tfs$TF, -->
+<!--                                     isoline_up_tfs$Score, -->
+<!--                                     isoline_up_tfs$padj) -->
+
+<!--   colnames(isoline_addition_up) <- c("TF", -->
+<!--                                     str_interp("${isoline}_up_score"), -->
+<!--                                     str_interp("${isoline}_up_padj")) -->
+
+<!--   isoline_down_tfs <- get(str_interp("${isoline}_down_tfs")) -->
+
+<!--   isoline_addition_down <- data.frame(isoline_down_tfs$TF, -->
+<!--                                       isoline_down_tfs$Score, -->
+<!--                                       isoline_down_tfs$padj) -->
+
+<!--   colnames(isoline_addition_down) <- c("TF", -->
+<!--                                       str_interp("${isoline}_down_score"), -->
+<!--                                       str_interp("${isoline}_down_padj")) -->
+
+<!--   # Add the info for up and down across all isolines regardless of significance -->
+<!--   if (nrow(isoline_addition_up) > 0) { -->
+<!--     combined_magic_output_sig_up <- left_join(combined_magic_output_sig_up, -->
+<!--                                               isoline_addition_up, -->
+<!--                                               by = "TF") -->
+<!--     combined_magic_output_sig_down <- left_join(combined_magic_output_sig_down, -->
+<!--                                                 isoline_addition_up, -->
+<!--                                                 by = "TF") -->
+<!--   } -->
+
+<!--   if (nrow(isoline_addition_down) > 0) { -->
+<!--     combined_magic_output_sig_up <- left_join(combined_magic_output_sig_up, -->
+<!--                                               isoline_addition_down, -->
+<!--                                               by = "TF") -->
+<!--     combined_magic_output_sig_down <- left_join(combined_magic_output_sig_down, -->
+<!--                                                 isoline_addition_down, -->
+<!--                                                 by = "TF") -->
+<!--   } -->
+<!-- } -->
+
+<!-- # Count the number of isolines that were significantly up/down in each TF -->
+<!-- for (row in 1:nrow(combined_magic_output_sig_up)) { -->
+<!--   num_sig_up <- 0 -->
+<!--   for (col in c("OVCAR3_up_padj", "OVCAR4_up_padj", "PEO_up_padj", "PEA_up_padj")) { -->
+<!--     padj <- combined_magic_output_sig_up[row, col] -->
+<!--     if (!is.na(padj) & padj < 0.05) { -->
+<!--       num_sig_up <- num_sig_up + 1 -->
+<!--     } -->
+<!--   } -->
+
+<!--   num_sig_down <- 0 -->
+<!--   for (col in c("OVCAR3_down_padj", "OVCAR4_down_padj", "PEO_down_padj", "PEA_down_padj")) { -->
+<!--     padj <- combined_magic_output_sig_up[row, col] -->
+<!--     if (!is.na(padj) & padj < 0.05) { -->
+<!--       num_sig_down <- num_sig_down + 1 -->
+<!--     } -->
+<!--   } -->
+
+<!--   combined_magic_output_sig_up[row, "num_isolines_sig_up"] <- num_sig_up -->
+<!--   combined_magic_output_sig_up[row, "num_isolines_sig_down"] <- num_sig_down -->
+<!-- } -->
+
+<!-- # Count the number of isolines that were significantly up/down in each TF -->
+<!-- for (row in 1:nrow(combined_magic_output_sig_down)) { -->
+<!--   num_sig_up <- 0 -->
+<!--   for (col in c("OVCAR3_up_padj", "OVCAR4_up_padj", "PEO_up_padj", "PEA_up_padj")) { -->
+<!--     padj <- combined_magic_output_sig_down[row, col] -->
+<!--     if (!is.na(padj) & padj < 0.05) { -->
+<!--       num_sig_up <- num_sig_up + 1 -->
+<!--     } -->
+<!--   } -->
+
+<!--   num_sig_down <- 0 -->
+<!--   for (col in c("OVCAR3_down_padj", "OVCAR4_down_padj", "PEO_down_padj", "PEA_down_padj")) { -->
+<!--     padj <- combined_magic_output_sig_down[row, col] -->
+<!--     if (!is.na(padj) & padj < 0.05) { -->
+<!--       num_sig_down <- num_sig_down + 1 -->
+<!--     } -->
+<!--   } -->
+
+<!--   combined_magic_output_sig_down[row, "num_isolines_sig_up"] <- num_sig_up -->
+<!--   combined_magic_output_sig_down[row, "num_isolines_sig_down"] <- num_sig_down -->
+<!-- } -->
+
+<!-- # Reorder columns -->
+<!-- rownames(combined_magic_output_sig_up) <- combined_magic_output_sig_up$TF -->
+<!-- combined_magic_output_sig_up <- combined_magic_output_sig_up[, c("TF", -->
+<!--                                                                  "num_isolines_sig_up", -->
+<!--                                                                  "num_isolines_sig_down", -->
+<!--                                                                  "OVCAR3_up_score", -->
+<!--                                                                  "OVCAR3_up_padj", -->
+<!--                                                                  "OVCAR4_up_score", -->
+<!--                                                                  "OVCAR4_up_padj", -->
+<!--                                                                  "PEO_up_score", -->
+<!--                                                                  "PEO_up_padj", -->
+<!--                                                                  "PEA_up_score", -->
+<!--                                                                  "PEA_up_padj", -->
+<!--                                                                  "OVCAR3_down_score", -->
+<!--                                                                  "OVCAR3_down_padj", -->
+<!--                                                                  "OVCAR4_down_score", -->
+<!--                                                                  "OVCAR4_down_padj", -->
+<!--                                                                  "PEO_down_score", -->
+<!--                                                                  "PEO_down_padj", -->
+<!--                                                                  "PEA_down_score", -->
+<!--                                                                  "PEA_down_padj")] -->
+
+<!-- rownames(combined_magic_output_sig_down) <- combined_magic_output_sig_down$TF -->
+<!-- combined_magic_output_sig_down <- combined_magic_output_sig_down[, c("TF", -->
+<!--                                                                      "num_isolines_sig_down", -->
+<!--                                                                      "num_isolines_sig_up", -->
+<!--                                                                      "OVCAR3_down_score", -->
+<!--                                                                      "OVCAR3_down_padj", -->
+<!--                                                                      "OVCAR4_down_score", -->
+<!--                                                                      "OVCAR4_down_padj", -->
+<!--                                                                      "PEO_down_score", -->
+<!--                                                                      "PEO_down_padj", -->
+<!--                                                                      "PEA_down_score", -->
+<!--                                                                      "PEA_down_padj", -->
+<!--                                                                      "OVCAR3_up_score", -->
+<!--                                                                      "OVCAR3_up_padj", -->
+<!--                                                                      "OVCAR4_up_score", -->
+<!--                                                                      "OVCAR4_up_padj", -->
+<!--                                                                      "PEO_up_score", -->
+<!--                                                                      "PEO_up_padj", -->
+<!--                                                                      "PEA_up_score", -->
+<!--                                                                      "PEA_up_padj")] -->
+
+<!-- # Sort by num significant -->
+<!-- combined_magic_output_sig_up <- combined_magic_output_sig_up[order(combined_magic_output_sig_up$num_isolines_sig_up, decreasing=TRUE),] -->
+<!-- combined_magic_output_sig_down <- combined_magic_output_sig_down[order(combined_magic_output_sig_down$num_isolines_sig_down, decreasing=TRUE),] -->
+
+<!-- # Tables include TF info across all isolines for each tf that is up/down regulated significantly in at least one isoline -->
+<!-- print(combined_magic_output_sig_up) -->
+<!-- print(combined_magic_output_sig_down) -->
+
+<!-- write.table(combined_magic_output_sig_up, -->
+<!--             file = str_interp("differential_tfs/combined_magic_output_up_sig_isolines.txt"), -->
+<!--             quote = FALSE, -->
+<!--             row.names = FALSE, -->
+<!--             na = "", -->
+<!--             sep = "\t") -->
+
+<!-- write.table(combined_magic_output_sig_down, -->
+<!--             file = str_interp("differential_tfs/combined_magic_output_down_sig_isolines.txt"), -->
+<!--             quote = FALSE, -->
+<!--             row.names = FALSE, -->
+<!--             na = "", -->
+<!--             sep = "\t") -->
+<!-- ``` -->

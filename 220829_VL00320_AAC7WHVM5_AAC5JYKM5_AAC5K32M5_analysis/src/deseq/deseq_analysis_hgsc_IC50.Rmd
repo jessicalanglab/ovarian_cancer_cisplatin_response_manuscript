@@ -1,0 +1,225 @@
+---
+title: "DESeq IC50: Ovarian Cancer Cell Line RNAseq Platinum Sensitivity"
+output: html_notebook
+---
+
+## Inputs
+
+```{r inputs}
+library(knitr)
+knit("src/load_inputs.Rmd")
+```
+
+## Run DESeq using IC50 as continuous variable
+
+### Create DESeqDataSet object dds
+
+DEseq with a continuous covariate assumes that counts are proportional to 2^(a * x) where a is the log2FoldChange and x is the covariate
+
+```{r }
+metadata$scaled_IC50 = scale(metadata$IC50, center = TRUE) # centering and scaling improves GLM convergence
+dds2 <- DESeqDataSetFromMatrix(countData = countmatrix2, colData = metadata, design = ~ scaled_IC50)
+```
+<!-- ### Pre-filtering -->
+
+<!-- This step removes genes with low expression to increase multiple comparison power. -->
+
+<!-- ```{r} -->
+<!-- sums2 = rowSums(counts(dds2)) -->
+<!-- filtered_genes2 = names(sums2[sums2 >= 100]) -->
+<!-- length(filtered_genes2) -->
+<!-- ``` -->
+
+
+### Run DESeq2 
+```{r }
+path = paste0(deseq_Rdata_folder,
+              "/dds_HGSC_IC50.Rdata")
+
+dds2 <- DESeq(dds2)
+save(dds2, file = path)
+
+# Alternatively, load the dds2 object
+load(path)
+```
+
+### Print DESeq results
+
+The fold change of a covariate is the change per unit increase/decrease
+
+```{r }
+res2 <- results(dds2)
+res2
+path = paste0(deseq_output_folder,
+              "/DESeq_HGSC_IC50.csv")
+write.csv(as.data.frame(res2), file = path)
+```
+
+### Filter DESeq2 results for significant genes
+Filter res for padj < 0.05 and |log2FC| >= 1.2
+```{r }
+res.2.filtered <- as.data.frame(res2) %>%
+  filter(padj<0.05)%>%
+  filter(log2FoldChange >= 1.2 | log2FoldChange <= -1.2)
+res.2.filtered
+```
+
+## Data QC
+
+No need to redo data transformation and PCA plot because this is the same as the previous section using categories instead of IC50.
+
+### Data transformation
+
+```{r }
+vsd2 <- vst(dds2)
+meanSdPlot(assay(vsd2))
+```
+
+<!-- ### PCA plot -->
+<!-- ```{r} -->
+<!-- pcaData2 <- plotPCA(vsd2, intgroup=c("Subtype", "PlatinumSensitivity","CellLine"), returnData=TRUE) -->
+<!-- percentVar2 <- round(100 * attr(pcaData2, "percentVar")) -->
+<!-- pca2 <- ggplot(pcaData2, aes(PC1, PC2, color=Subtype, shape=PlatinumSensitivity, label=CellLine)) + -->
+<!--   geom_point(size=3) + -->
+<!--   geom_text(hjust=0, vjust=0) + -->
+<!--   xlab(paste0("PC1: ",percentVar2[1],"% variance")) + -->
+<!--   ylab(paste0("PC2: ",percentVar2[2],"% variance")) + -->
+<!--   coord_fixed() + -->
+<!--   theme_classic() + -->
+<!--   colScale -->
+<!-- pca2 -->
+<!-- ggsave("output/pca_HGSC_IC50.pdf", pca2) -->
+<!-- ``` -->
+
+## Data visualization
+
+### Plot Heatmap of top differentially expressed genes
+```{r , fig.height = 12, fig.width = 8}
+vsd2.df <-as.data.frame(assay(vsd2))
+color <- colorRampPalette(c("white", "red"))(40)
+breaks <- seq(6,12,length.out=40)  
+pheatmap(vsd2.df[rownames(res.2.filtered),], labels_col=colData(dds2)[,c("CellLine")],annotation_col=df, color=color, breaks=breaks)
+```
+
+### Heatmap with mean-centered data
+```{r, fig.height=12, fig.width=8}
+vsd2.meancenter <- apply(vsd2.df, 1, center_scale)
+vsd2.meancenter <-t(vsd2.meancenter)
+colnames(vsd2.meancenter) <- colnames(vsd2.df)
+vsd2.meancenter <- as.data.frame(vsd2.meancenter) 
+color <- colorRampPalette(brewer.pal(11, "PuOr"))(50)
+myBreaks2 <- c(seq(min(vsd2.meancenter[rownames(res.2.filtered),]), 0, length.out=ceiling(50/2) + 1), 
+              seq(max(vsd2.meancenter[rownames(res.2.filtered),])/50, max(vsd2.meancenter[rownames(res.2.filtered),]), length.out=floor(50/2)))
+pheatmap(vsd2.meancenter[rownames(res.2.filtered),], labels_col=colData(dds)[,c("CellLine")], color=color, border_color = NA, annotation_col = df, breaks=myBreaks2)
+```
+
+### Volcano Plots
+```{r, fig.height=5, fig.width=10}
+res.2.filtered %>% 
+  ggplot(aes(x=log2FoldChange, y=-log10(pvalue), label=rownames(res.2.filtered))) +
+  geom_point() +
+  theme_minimal() +
+  scale_color_manual(values = c("black", "blue", "red"))+
+  geom_text_repel()
+```
+
+
+## Gene ontology
+
+### GSEA of genes differentially expressed based on IC50 of cellline
+
+Perform gene set enrichment analysis using Cluster Profiler. This gives us GO pathways that are significantly regulated based on the log2fold change of expression of individual genes. 
+
+Using a padj Cutoff of 0.15.
+
+```{r}
+gene_list2 <- res2$log2FoldChange
+names(gene_list2) = rownames(res2)
+gene_list2 <- sort(gene_list2, decreasing = TRUE)
+
+# Set the seed so our results are reproducible:
+set.seed(2024)
+gsea_res2 <- gseGO(gene_list2, ont = "BP", OrgDb = "org.Hs.eg.db", keyType = "SYMBOL", seed = TRUE, pvalueCutoff = .15)
+
+# Format output
+gsea_res_df2 <- as.data.frame(gsea_res2)
+gsea_res_df2 <- gsea_res_df2 %>%
+  mutate(original_row_num = row_number())
+gsea_res_df2 <- gsea_res_df2[order(gsea_res_df2$NES, decreasing = TRUE),]
+row.names(gsea_res_df2) <- gsea_res_df2$ID
+```
+NES is the normalized enrichment score.
+```{r}
+gsea_res_df_short2 <- gsea_res_df2[c("pvalue", "p.adjust", "NES", "Description")]
+gsea_res_df_short2$"core_enrichment_genes" <- gsea_res_df2$core_enrichment
+```
+
+```{r Volcano down}
+as.data.frame(gsea_res_df_short2) %>%
+  ggplot(aes(x = NES, y = -log10(p.adjust), label = rownames(gsea_res_df_short2))) +
+  geom_point() +
+  theme_minimal() +
+  scale_color_manual(values = c("black", "blue", "red")) +
+  geom_text_repel() +
+  geom_hline(yintercept = 1.301) +
+  geom_vline(xintercept = 1.2) +
+  geom_vline(xintercept = -1.2) +
+  xlim(-10, 10)
+```
+
+#### Upregulated pathways
+
+```{r}
+gsea_res_df_short.up2 <- subset(gsea_res_df_short2, gsea_res_df_short2$NES >= 0)
+gsea_res_df_short.up2 = gsea_res_df_short.up2[order(gsea_res_df_short.up2$p.adjust), ]
+path = paste0(deseq_output_folder,
+              "/IC50_cisplatin_resistant_significantly_upregulated_pathways.csv")
+write.csv(gsea_res_df_short.up2, file = path)
+gsea_res_df_short.up2
+```
+
+Use Revigo to cluster upregulated pathways with pvalue < 0.15
+
+```{r upreg cluster IC50}
+revigo_input.cellline.up2 <- gsea_res_df_short.up2[gsea_res_df_short.up2$p.adjust < 0.15,][c("p.adjust")]
+rownames(revigo_input.cellline.up2) <- rownames(gsea_res_df_short.up2[gsea_res_df_short.up2$p.adjust < 0.15,])
+
+simMatrix <- calculateSimMatrix(rownames(revigo_input.cellline.up2),
+  orgdb = "org.Hs.eg.db",
+  ont = "BP",
+  method = "Rel"
+)
+scores <- setNames(-log10(revigo_input.cellline.up2$p.adjust), rownames(revigo_input.cellline.up2))
+
+if (nrow(revigo_input.cellline.up2) > 1) {
+  reducedTerms <- reduceSimMatrix(simMatrix,
+    scores,
+    threshold = 0.7,
+    orgdb = "org.Hs.eg.db"
+  )
+} else {
+  reducedTerms <- data.frame(matrix(ncol = 0, nrow = 0))
+  print("There will be no graphs appearing below this because there were not enough significantly upregulated pathways to meaningfully cluster them")
+}
+
+```
+
+Revigo treemap plot. Terms grouped/colored based on parent. Space is proportional to statistical significance of the GO term (-log10(pvalue)).
+
+```{r upreg cluster IC50 treemap}
+if (nrow(reducedTerms) > 2) {
+  treemapPlot(reducedTerms)
+}
+```
+
+#### Downregulated pathways
+
+There were no downregulated pathways with a padj < 0.15. The smallest padj value for a downregulated pathway was 0.33 (cellular response to zinc ion). The second smallest padj value for a downregulated pathway was 0.48.
+
+```{r}
+gsea_res_df_short2.down <- subset(gsea_res_df_short2, gsea_res_df_short2$NES <= 0)
+path = paste0(deseq_output_folder,
+              "/IC50_cisplatin_resistant_significantly_downregulated_pathways.csv")
+write.csv(gsea_res_df_short2.down, file = path)
+gsea_res_df_short2.down
+```

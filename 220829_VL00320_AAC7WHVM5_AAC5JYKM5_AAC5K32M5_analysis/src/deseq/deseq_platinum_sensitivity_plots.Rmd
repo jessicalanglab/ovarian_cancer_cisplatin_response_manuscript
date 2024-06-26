@@ -1,0 +1,368 @@
+---
+title: "Ovarian Cancer Cell Line RNAseq Platinum Sensitivity"
+output: html_notebook
+---
+
+## Introduction  
+
+RNA-seq was run on 36 ovarian cancer cell lines, each in singlicate.  
+
+All 36 cell lines have 72h cisplatin IC50s determined by Kristin Adams and Kendra 
+Wendt in the Lang Lab. 
+
+![Cisplatin IC50s](CisplatinIC50.jpg){height=50%, width=50%}
+
+Add in links to Lab notebooks for IC50, RNAseq sample prep
+
+## Inputs
+
+Inputs consisted of:  
+
+* Metadata spreadsheet  
+* salmon.merged.gene_counts.tsv file from nf-core/rnaseq pipeline output  
+* Necessary packages  
+
+```{r load packages, include=FALSE}
+library(tidyverse)
+library(readxl)
+library(DESeq2)
+library(vsn)
+library(pheatmap)
+library(RColorBrewer)
+library(ggrepel)
+library(dendextend)
+```
+
+## DESeq2
+
+To determine genes differentially expressed between cisplatin sensitive and resistant cell lines, we used the median cisplatin IC50 of all 36 cell lines as a cut-point, and excluded cell lines within +/- one standard deviation of the median. These were defined in the metadata table.
+
+### Read in metadata table
+
+```{r load metatable}
+as.data.frame(read_excel("Metadata3.xlsx")) -> metadata
+row.names(metadata) <- metadata$files
+metadata
+```
+### Load count matrix
+
+```{r read count matrix}
+countmatrix <- as.matrix(read.delim("../star_salmon/salmon.merged.gene_counts.tsv", sep="\t", row.names="gene_id"))
+countmatrix <- countmatrix[,-1]
+countmatrix2 <- matrix(as.numeric(countmatrix), ncol = ncol(countmatrix), dimnames = list(rownames(countmatrix), colnames(countmatrix)))
+countmatrix2 <- round(countmatrix2)
+countmatrix2 <- countmatrix2[,rownames(metadata)]
+head(countmatrix2)
+```
+### Create DESeqDataSet object dds
+
+```{r DESeqDataSet generation}
+dds <- DESeqDataSetFromMatrix(countData = countmatrix2, colData = metadata, design = ~ Subtype + PlatinumSensitivity)
+```
+### Pre-filtering
+This step removes genes with low expression to increase multiple comparison power.
+
+```{r}
+keep <- rowSums(counts(dds)) >= 500
+dds <- dds[keep,]
+nrow(dds)
+```
+
+
+### Run DESeq2 
+```{r DESeq2}
+dds <- DESeq(dds)
+```
+
+### Print DESeq results
+```{r create results table}
+res <- results(dds, contrast=c("PlatinumSensitivity", "resistant", "sensitive"))
+res
+write.csv(as.data.frame(res), file = "DESeq.csv")
+```
+
+### Filter DESeq2 results for significant genes
+Filter res for padj < 0.05 and |log2FC| >= 1.2
+```{r filter res}
+res.filtered <- as.data.frame(res) %>%
+  filter(padj<0.05)%>%
+  filter(log2FoldChange >= 1.2 | log2FoldChange <= -1.2)
+res.filtered
+```
+## Data QC
+
+### Data transformation 
+Here we performed normal transformation [log2(n+1)], variance stabilized transformation, and regularized log tranformation to improve visualization of the data values. To speed up subsequent re-runs, we have hidden analysis for non-vst.
+
+```{r norm transformation and stdev plot}
+# ntd <- normTransform(dds)
+#meanSdPlot(assay(ntd))
+```
+
+
+```{r var stab transformation and stdev plot}
+vsd <- vst(dds)
+meanSdPlot(assay(vsd))
+```
+
+
+```{r reg log transformation and stdev plot}
+# rld <- rlog(dds)
+# meanSdPlot(assay(rld))
+```
+
+Based on this data, variance-stabilized tranformation lead to the lowest standard deviation between samples and was mostly located towards the high expression transcripts, as might be expected.
+
+### PCA plot
+```{r vsd PCA}
+pcaData <- plotPCA(vsd, intgroup=c("Subtype", "PlatinumSensitivity","CellLine"), returnData=TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+myColors <- c("#76AB7E", "#63E678", "#1D32FB", "#7B87FD", "#01BD1F", "#E8A426", "#0B7C1D", "#BB19E7")
+names(myColors) <- levels(pcaData$Subtype)
+colScale <- scale_colour_manual(name = "Subtype",values = myColors)
+pca <- ggplot(pcaData, aes(PC1, PC2, color=Subtype, shape=PlatinumSensitivity, label=CellLine)) +
+  geom_point(size=3) +
+  geom_text(hjust=0, vjust=0) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) +
+  coord_fixed() +
+  theme_classic() + 
+  colScale
+pca
+ggsave("pca.pdf", pca)
+```
+PCA plot groups samples roughly by subtype
+
+### Sample-wise correlation
+
+```{r, fig.height=6, fig.width= 8}
+vsd.mod <- vsd.df 
+colnames(vsd.mod) <- metadata$CellLine[match(colnames(vsd.mod), metadata$files)]
+vsd.mod$gene <- row.names(vsd.mod)
+
+corr <- vsd.mod %>%
+  select(-gene) %>%
+  cor(method = "spearman")
+
+df.mod <- df
+row.names(df.mod) <- metadata$CellLine[match(row.names(df.mod), metadata$files)]
+
+pheatmap(corr, annotation_col=df.mod)
+```
+
+### Barnes RF approach?
+Contacted PI 10/27/2022 because script is not on github. No response as of 12/16/2022.
+
+
+### Plot heatmaps to check sample to sample variability
+Plotting the top 100 most highly expressed genes:
+```{r heatmaps}
+select <- order(rowMeans(counts(dds,normalized=TRUE)),
+                decreasing=TRUE)[1:100]
+df <- as.data.frame(colData(dds)[,c("Subtype", "PlatinumSensitivity")])
+pheatmap(assay(vsd)[select,], cluster_rows=FALSE, show_rownames=FALSE,
+         labels_col=colData(dds)[,c("CellLine")],annotation_col=df)
+```
+### Dendrogram based on gene expression
+Pull genes contributing to principal components 1 & 2
+```{r}
+TPM <- as.matrix(read.delim("../star_salmon/salmon.merged.gene_tpm.tsv", sep="\t", row.names="gene_id"))
+TPM <- TPM[,-1]
+TPM <- matrix(as.numeric(TPM), ncol = ncol(TPM), dimnames = list(rownames(TPM), colnames(TPM)))
+TPM <- round(TPM)
+TPM <- TPM[,rownames(metadata)]
+TPM2 <- TPM
+colnames(TPM2) <- metadata$CellLine[match(colnames(TPM2), metadata$files)]
+TPM.log <- log(TPM+1)
+PCA <- prcomp(TPM.log, scale=TRUE)
+PCA.mat <- as.data.frame(PCA$x)
+PCA.PC1filt <- PCA.mat %>% filter(PC1 < quantile(PCA.mat[,"PC1"], .2)[[1]])
+```
+
+
+```{r}
+TPM3 <- TPM2[rowSums(TPM2)>1000,]
+counts.sc <- t(TPM3)
+dist <- dist(counts.sc)
+clust <- hclust(dist, method="average")
+dend <- as.dendrogram(clust)
+```
+
+```{r, fig.width=10}
+par(mar=c(10,2,1,1))
+my_colors <- ifelse(metadata$Subtype=="HGSC", "red", 
+                    ifelse(metadata$Subtype=="LGSC", "blue", 
+                           ifelse(metadata$Subtype=="OCCC", "yellow", 
+                                  ifelse(metadata$Subtype=="EC", "green",
+                                         ifelse(metadata$Subtype=="SCCOHT","purple", 
+                                                ifelse(metadata$Subtype=="MUC","orange","white"))))))
+plot(dend)
+colored_bars(colors = my_colors, dend = dend, rowLabels = "Subtype")
+```
+I tried a lot of different iterations of this (including: various cutoffs for variance of genes, genes contributing most to first and second principal components, more highly expressed genes, TPM vs vst data, clustering methods), but the fundamental problem is that isogenic pairs rarely cluster anywhere near each other, even though the PCA analysis shows this relationship. I don't know that this is a reliable method for determining relatedness/subtyping, unless a robust gene set is developed. 
+
+## Data visualization
+
+### Plot Heatmap of top differentially expressed genes
+```{r plot heatmap, fig.height = 8, fig.width = 8}
+vsd.df <-as.data.frame(assay(vsd))
+pheatmap(vsd.df[rownames(res.filtered),], labels_col=colData(dds)[,c("CellLine")],annotation_col=df, color=colorRampPalette(c("white", "red"))(50))
+```
+### Heatmap based on TPM
+```{r, fig.height = 8, fig.width = 8}
+pheatmap(TPM.log[rownames(res.filtered),], labels_col=colData(dds)[,c("CellLine")], annotation_col=df, color=colorRampPalette(c("white", "red"))(10))
+```
+### Heatmap with mean-centered data
+```{r, fig.height=7, fig.width=8}
+center_scale <- function(x) {
+  scale(x, scale=FALSE)
+}
+vsd.meancenter <- apply(vsd.df, 1, center_scale)
+vsd.meancenter <-t(vsd.meancenter)
+colnames(vsd.meancenter) <- colnames(vsd.df)
+vsd.meancenter <- as.data.frame(vsd.meancenter) 
+color <- colorRampPalette(brewer.pal(11, "PuOr"))(50)
+myBreaks <- c(seq(min(vsd.meancenter[rownames(res.filtered),]), 0, length.out=ceiling(50/2) + 1), 
+              seq(max(vsd.meancenter[rownames(res.filtered),])/50, max(vsd.meancenter[rownames(res.filtered),]), length.out=floor(50/2)))
+pheatmap(vsd.meancenter[rownames(res.filtered),], labels_col=colData(dds)[,c("CellLine")], color=color, border_color = NA, annotation_col = df, breaks=myBreaks)
+```
+
+### Volcano Plots
+```{r, fig.height=5, fig.width=10}
+res.filtered %>% 
+  ggplot(aes(x=log2FoldChange, y=-log10(pvalue), label=rownames(res.filtered))) +
+  geom_point() +
+  theme_minimal() +
+  scale_color_manual(values = c("black", "blue", "red"))+
+  geom_text_repel()
+```
+  
+### Run Gene Ontology
+```{r run gene ontology}
+
+```
+
+## Re-run DESeq using IC50 as continuous variable
+### Create DESeqDataSet object dds
+
+```{r }
+dds2 <- DESeqDataSetFromMatrix(countData = countmatrix2, colData = metadata, design = ~ Subtype + IC50)
+```
+### Pre-filtering
+This step removes genes with low expression to increase multiple comparison power.
+
+```{r}
+keep <- rowSums(counts(dds2)) >= 100
+dds2 <- dds2[keep,]
+nrow(dds2)
+```
+
+
+### Run DESeq2 
+```{r }
+dds2 <- DESeq(dds2)
+```
+
+### Print DESeq results
+```{r }
+res2 <- results(dds2)
+res2
+write.csv(as.data.frame(res2), file = "DESeq_IC50.csv")
+```
+
+### Filter DESeq2 results for significant genes
+Filter res for padj < 0.05 and |log2FC| >= 1.2
+```{r }
+res.2.filtered <- as.data.frame(res2) %>%
+  filter(padj<0.05)%>%
+  filter(log2FoldChange >= 1.2 | log2FoldChange <= -1.2)
+res.2.filtered
+```
+
+## Data QC
+
+### Data transformation 
+
+```{r }
+vsd2 <- vst(dds2)
+meanSdPlot(assay(vsd2))
+```
+
+### PCA plot
+```{r}
+pcaData2 <- plotPCA(vsd2, intgroup=c("Subtype", "PlatinumSensitivity","CellLine"), returnData=TRUE)
+percentVar2 <- round(100 * attr(pcaData2, "percentVar"))
+pca2 <- ggplot(pcaData2, aes(PC1, PC2, color=Subtype, shape=PlatinumSensitivity, label=CellLine)) +
+  geom_point(size=3) +
+  geom_text(hjust=0, vjust=0) +
+  xlab(paste0("PC1: ",percentVar2[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar2[2],"% variance")) +
+  coord_fixed() +
+  theme_classic() +
+  colScale
+pca2
+ggsave("pca_IC50.pdf", pca2)
+```
+
+## Data visualization
+
+### Plot Heatmap of top differentially expressed genes
+```{r , fig.height = 3, fig.width = 8}
+vsd2.df <-as.data.frame(assay(vsd2))
+color <- colorRampPalette(c("white", "red"))(40)
+breaks <- seq(6,12,length.out=40)  
+pheatmap(vsd2.df[rownames(res.2.filtered),], labels_col=colData(dds2)[,c("CellLine")],annotation_col=df, color=color, breaks=breaks)
+```
+
+### Heatmap with mean-centered data
+```{r, fig.height=3, fig.width=8}
+vsd2.meancenter <- apply(vsd2.df, 1, center_scale)
+vsd2.meancenter <-t(vsd2.meancenter)
+colnames(vsd2.meancenter) <- colnames(vsd2.df)
+vsd2.meancenter <- as.data.frame(vsd2.meancenter) 
+color <- colorRampPalette(brewer.pal(11, "PuOr"))(50)
+myBreaks2 <- c(seq(min(vsd2.meancenter[rownames(res.2.filtered),]), 0, length.out=ceiling(50/2) + 1), 
+              seq(max(vsd2.meancenter[rownames(res.2.filtered),])/50, max(vsd2.meancenter[rownames(res.2.filtered),]), length.out=floor(50/2)))
+pheatmap(vsd2.meancenter[rownames(res.2.filtered),], labels_col=colData(dds2)[,c("CellLine")], color=color, border_color = NA, annotation_col = df, breaks=myBreaks2)
+```
+
+### Volcano Plots
+```{r, fig.height=5, fig.width=10}
+res.2.filtered %>% 
+  ggplot(aes(x=log2FoldChange, y=-log10(pvalue), label=rownames(res.2.filtered))) +
+  geom_point() +
+  theme_minimal() +
+  scale_color_manual(values = c("black", "blue", "red"))+
+  geom_text_repel()
+```
+
+
+
+
+
+
+### Heatmap of genes involved in cisplatin resistance
+Plot heatmap of genes annotated as involved in cisplatin resistance in PMID: 34645978
+```{r, fig.height = 45, fig.width = 8}
+resist.genes <- read.delim("ResistanceGenes.txt", header = FALSE)
+resist.genes <- resist.genes$V1
+pheatmap(TPM.log[resist.genes[resist.genes %in% row.names(TPM.log)],], labels_col=colData(dds)[,c("CellLine")],annotation_col=df, color=colorRampPalette(c("white", "red"))(50))
+```
+
+```{r}
+res2.resist <- res2[resist.genes[resist.genes %in% row.names(res2)],c("log2FoldChange","padj")]
+res2.resist <- as.data.frame(res2.resist) %>%
+  filter(padj < 0.05)
+res2.resist
+```
+### Heatmap with mean-centered data
+```{r, fig.height=45, fig.width=8}
+myBreaks3 <- c(seq(min(vsd.meancenter[resist.genes[resist.genes %in% row.names(vsd.meancenter)],]), 0, length.out=ceiling(50/2) + 1), 
+              seq(max(vsd.meancenter[resist.genes[resist.genes %in% row.names(vsd.meancenter)],])/50, max(vsd.meancenter[resist.genes[resist.genes %in% row.names(vsd.meancenter)],]), length.out=floor(50/2)))
+pheatmap(vsd.meancenter[resist.genes[resist.genes %in% row.names(vsd.meancenter)],], labels_col=colData(dds)[,c("CellLine")],annotation_col=df, color=color, border_color = NA, breaks=myBreaks3)
+```
+
+
+
+## Package versions
+Figure out how to print all package versions used.

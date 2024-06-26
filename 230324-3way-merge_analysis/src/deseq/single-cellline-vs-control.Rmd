@@ -1,0 +1,378 @@
+---
+title: Parameterized single cellline vs control
+output: html_notebook
+  
+params:
+  experimentalCellLine: "SUPPLY THIS"
+  controlCellLine: "SUPPLY THIS"
+  countmatrix.all: "SUPPLY THIS"
+  metadata.all: "SUPPLY THIS"
+editor_options: 
+  chunk_output_type: inline
+---
+
+<!-- Expects the following parameters: -->
+<!-- 2. experimentalCellLine (ex: "PEO6") -->
+<!-- 3. controlCellLine (ex: "PEO1") -->
+<!-- 4. countmatrix.all -->
+<!-- 5. metadata.all -->
+
+```{r read parameters cellline}
+cont <- params$controlCellLine
+exp <- params$experimentalCellLine
+countmatrix.all <- params$countmatrix.all
+metadata.all <- params$metadata.all
+rm(params) # Remove the parameters so that we can make subsequent parameterized calls
+```
+
+---
+title: "DESeq Analysis: `r exp` vs `r cont`"
+---
+
+```{r load packages cellline, include=FALSE}
+library(tidyverse)
+library(readxl)
+library(DESeq2)
+library(vsn)
+library(pheatmap)
+library(RColorBrewer)
+library(ggrepel)
+library(biomaRt)
+library(DESeqAnalysis)
+library(UpSetR)
+library(gprofiler2)
+library(rrvgo)
+library(clusterProfiler)
+library(enrichplot)
+library(plotly)
+library("org.Hs.eg.db")
+```
+
+## Perform analysis of `r exp` vs `r cont`
+
+## Gather and organize raw data
+
+```{r restrict to pair}
+metadata.pair <- as.data.frame(metadata.all) %>%
+  filter(CellLine == cont | CellLine == exp)
+as.data.frame(metadata.pair)
+
+countmatrix.pair <- countmatrix.all[, metadata.pair$ShortName]
+as.data.frame(countmatrix.pair)
+```
+
+## Differential expression analysis
+
+Run Deseq on the data set.
+
+<!-- ```{r load deseq} -->
+<!-- # Saving time by just loading the dds we already ran (recent changes are all after this point) -->
+<!-- load(str_interp("Rdata/${exp}_vs_${cont}_dds.RData")) -->
+<!-- ``` -->
+
+```{r setup deseq pair}
+# Having the replicate number in the design makes it a paired design
+dds.pair <- DESeqDataSetFromMatrix(
+  countData = countmatrix.pair,
+  colData = metadata.pair,
+  design = ~ CellLine + Replicate)
+dds.pair$CellLine <- relevel(dds.pair$CellLine, ref = cont)
+```
+
+Using a Wald Test because we are only comparing two cell lines.
+```{r pair deseq}
+dds.pair <- DESeq(dds.pair, "Wald")
+save(dds.pair, file = str_interp("Rdata/${exp}_vs_${cont}_dds.RData"))
+```
+
+### Print DESeq2 results
+```{r print deseq2 results}
+res <- results(dds.pair, contrast = c("CellLine", exp, cont), alpha = 0.05)
+res <- res[order(res$log2FoldChange), ]
+outFile <- str_interp("output/${exp}_vs_${cont}_deseq_results.csv")
+write.csv(as.data.frame(res), file = outFile)
+```
+
+### Filter DESeq2 results for significant genes
+Filter res for padj < 0.05
+```{r filter res}
+res.filtered <- as.data.frame(res) %>%
+  filter(padj < 0.05)
+  # filter(log2FoldChange >= 1.5 | log2FoldChange <= -1.5)
+res.filtered <- res.filtered[order(res.filtered$log2FoldChange, decreasing = TRUE),]
+res.filtered
+```
+
+#### Significant "Up" genes (`r exp` compared to control `r cont`)
+```{r up genes}
+up.unfiltered <- subset(res, log2FoldChange > 0)
+up.unfiltered <- up.unfiltered[order(up.unfiltered$log2FoldChange, decreasing = TRUE), ]
+outFile <- str_interp("output/${exp}_vs_${cont}_all_upregulated_genes.csv")
+write.csv(up.unfiltered[, c("log2FoldChange", "padj")], file = outFile)
+up.unfiltered[, c("log2FoldChange", "padj")]
+
+up <- subset(res.filtered, log2FoldChange > 0)
+up <- up[order(up$log2FoldChange, decreasing = TRUE), ]
+outFile <- str_interp("output/${exp}_vs_${cont}_significantly_upregulated_genes.csv")
+write.csv(up[, c("log2FoldChange", "padj")], file = outFile)
+print(up[, c("log2FoldChange", "padj")])
+```
+
+#### Significant "Down" genes (`r exp` compared to control `r cont`)
+```{r down genes}
+down.unfiltered <- subset(res, log2FoldChange < 0)
+down.unfiltered <- down.unfiltered[order(down.unfiltered$log2FoldChange, decreasing = FALSE), ]
+outFile <- str_interp("output/${exp}_vs_${cont}_all_downregulated_genes.csv")
+write.csv(down.unfiltered[, c("log2FoldChange", "padj")], file = outFile)
+print(down.unfiltered[, c("log2FoldChange", "padj")])
+
+down <- subset(res.filtered, log2FoldChange < 0)
+down <- down[order(down$log2FoldChange, decreasing = TRUE), ]
+outFile <- str_interp("output/${exp}_vs_${cont}_significantly_downregulated_genes.csv")
+write.csv(down[, c("log2FoldChange", "padj")], file = outFile)
+print(down[, c("log2FoldChange", "padj")])
+```
+
+### Volcano Plot
+```{r Volcano}
+as.data.frame(res) %>%
+  ggplot(aes(x = log2FoldChange, y = -log10(padj), label = rownames(res))) +
+  geom_point() +
+  theme_minimal() +
+  scale_color_manual(values = c("black", "blue", "red")) +
+  geom_text_repel() +
+  geom_hline(yintercept = 1.301) +
+  geom_vline(xintercept = 1.2) +
+  geom_vline(xintercept = -1.2) +
+  xlim(-10, 10)
+```
+
+## Gene Ontology
+
+### GSEA of genes differentially express in (`r exp` compared to control `r cont`)
+
+Perform gene set enrichment analysis using Cluster Profiler. This gives us GO pathways that are significantly regulated based on the log2fold change of expression of individual genes. 
+
+Using a pvalue Cutoff of 0.05
+
+```{r}
+gene_list <- res$log2FoldChange
+names(gene_list) <- rownames(res)
+gene_list <- sort(gene_list, decreasing = TRUE)
+
+# Set the seed so our results are reproducible:
+set.seed(2023)
+gsea_res <- gseGO(gene_list, ont = "BP", OrgDb = "org.Hs.eg.db", keyType = "SYMBOL", seed = TRUE, pvalueCutoff = 0.05)
+
+# Format output
+gsea_res_df <- as.data.frame(gsea_res)
+gsea_res_df <- gsea_res_df %>%
+  mutate(original_row_num = row_number())
+gsea_res_df <- gsea_res_df[order(gsea_res_df$NES, decreasing = TRUE),]
+row.names(gsea_res_df) <- gsea_res_df$ID
+```
+
+NES is the normalized enrichment score.
+```{r}
+gsea_res_df_short <- gsea_res_df[c("pvalue", "p.adjust", "NES", "Description")]
+gsea_res_df_short$"core_enrichment_genes" <- gsea_res_df$core_enrichment
+```
+
+#### Upregulated pathways
+
+```{r}
+gsea_res_df_short.up <- subset(gsea_res_df_short, gsea_res_df_short$NES >= 0)
+outFile <- str_interp("output/${exp}_vs_${cont}_significantly_upregulated_pathways.csv")
+write.csv(gsea_res_df_short.up, file = outFile)
+gsea_res_df_short.up
+```
+
+GSEA plot of the five most upregulated pathways (or least downregulated)
+
+```{r}
+maxIndex <- min(5, nrow(gsea_res_df)) # Prevents us from trying to access out of bounds if there are not five pathways
+top5PathwaysIds = gsea_res_df[1:maxIndex, "original_row_num"]
+
+gseaplot2(gsea_res, geneSetID = top5PathwaysIds, pvalue_table = FALSE, ES_geom = "dot")
+```
+
+Volcano Plot (Average NES & adjusted p value)
+
+```{r Volcano cellline up}
+as.data.frame(gsea_res_df_short.up) %>%
+  ggplot(aes(x = NES, y = -log10(p.adjust), label = rownames(gsea_res_df_short.up))) +
+  geom_point() +
+  theme_minimal() +
+  scale_color_manual(values = c("black", "blue", "red")) +
+  geom_text_repel() +
+  geom_hline(yintercept = 1.301) +
+  geom_vline(xintercept = 1.2) +
+  geom_vline(xintercept = -1.2) +
+  xlim(-10, 10)
+```
+
+#### Downregulated pathways
+
+```{r}
+gsea_res_df_short.down <- subset(gsea_res_df_short, gsea_res_df_short$NES <= 0)
+outFile <- str_interp("output/${exp}_vs_${cont}_significantly_downregulated_pathways.csv")
+write.csv(gsea_res_df_short.down, file = outFile)
+gsea_res_df_short.down
+```
+
+GSEA plot of the five most downregulated pathways (or least upregulated)
+
+```{r}
+minIndex <- max(1, nrow(gsea_res_df) - 5) # Prevents us from trying to access out of bounds if there are not five downregulated pathways
+bottom5PathwaysIds = gsea_res_df[minIndex:nrow(gsea_res_df), "original_row_num"]
+gseaplot2(gsea_res, geneSetID = bottom5PathwaysIds, pvalue_table = FALSE, ES_geom = "dot")
+```
+
+Volcano plot (Average NES & adjusted p value)
+
+```{r Volcano cellline down}
+as.data.frame(gsea_res_df_short.down) %>%
+  ggplot(aes(x = NES, y = -log10(p.adjust), label = rownames(gsea_res_df_short.down))) +
+  geom_point() +
+  theme_minimal() +
+  scale_color_manual(values = c("black", "blue", "red")) +
+  geom_text_repel() +
+  geom_hline(yintercept = 1.301) +
+  geom_vline(xintercept = 1.2) +
+  geom_vline(xintercept = -1.2) +
+  xlim(-10, 10)
+```
+
+### Clustered pathways
+
+#### Clustered upregulated pathways
+
+Use Revigo to cluster upregulated pathways
+
+```{r upreg cluster cellline}
+revigo_input.cellline.up <- gsea_res_df_short.up[c("p.adjust")]
+rownames(revigo_input.cellline.up) <- rownames(gsea_res_df_short.up)
+
+simMatrix <- calculateSimMatrix(rownames(revigo_input.cellline.up),
+  orgdb = "org.Hs.eg.db",
+  ont = "BP",
+  method = "Rel"
+)
+scores <- setNames(-log10(revigo_input.cellline.up$p.adjust), rownames(revigo_input.cellline.up))
+
+if (nrow(revigo_input.cellline.up) > 1) {
+  reducedTerms <- reduceSimMatrix(simMatrix,
+    scores,
+    threshold = 0.7,
+    orgdb = "org.Hs.eg.db"
+  )
+} else {
+  reducedTerms <- data.frame(matrix(ncol = 0, nrow = 0))
+  print("There will be no graphs appearing below this because there were not enough significantly upregulated pathways to meaningfully cluster them")
+}
+
+```
+
+Revigo interactive scatter plot. Distances represent the similarity between terms, axes are the first 2 components of a PCA plot, Each bubble indicates the representative (chosen mostly by p-value) from a cluster of terms. Size of the bubble indicates the generality of the term (large meaning a more general term).
+
+```{r upreg cluster cellline scatterplot}
+if (nrow(reducedTerms) > 2) {
+  revigo_scatterplot(simMatrix, reducedTerms)
+}
+
+```
+
+Revigo heatmap plot. Similar terms clustered
+
+```{r upreg cluster cellline heatmap}
+if (nrow(reducedTerms) > 2) {
+  heatmapPlot(simMatrix,
+    reducedTerms,
+    annotateParent = TRUE,
+    annotationLabel = "parentTerm",
+    fontsize = 6
+  )
+}
+```
+
+This is the same content, but interactive.
+
+```{r upreg cluster cellline heatmap2}
+if (nrow(reducedTerms) > 2) {
+  revigo_heatmap(simMatrix, reducedTerms)
+}
+```
+
+Revigo treemap plot. Terms grouped/colored based on parent. Space is proportional to statistical significance of the GO term (-log10(pvalue)).
+
+```{r upreg cluster cellline treemap}
+if (nrow(reducedTerms) > 2) {
+  treemapPlot(reducedTerms)
+}
+```
+
+#### Clustered downregulated pathways
+
+Use Revigo to cluster downregulated pathways
+
+
+```{r downreg cluster cellline}
+revigo_input.cellline.down <- gsea_res_df_short.down[c("p.adjust")]
+rownames(revigo_input.cellline.down) <- rownames(gsea_res_df_short.down)
+
+simMatrix <- calculateSimMatrix(rownames(revigo_input.cellline.down),
+  orgdb = "org.Hs.eg.db",
+  ont = "BP",
+  method = "Rel"
+)
+
+scores <- setNames(-log10(revigo_input.cellline.down$p.adjust), rownames(revigo_input.cellline.down))
+
+if (nrow(revigo_input.cellline.down) > 1) {
+  reducedTerms <- reduceSimMatrix(simMatrix,
+    scores,
+    threshold = 0.7,
+    orgdb = "org.Hs.eg.db"
+  )
+} else {
+  reducedTerms <- data.frame(matrix(ncol = 0, nrow = 0))
+  print("There will be no graphs appearing below this because there were not enough significantly downregulated pathways to meaningfully cluster them")
+}
+```
+
+Revigo interactive scatter plot. Distances represent the similarity between terms, axes are the first 2 components of a PCA plot, Each bubble indicates the representative (chosen mostly by p-value) from a cluster of terms. Size of the bubble indicates the generality of the term (large meaning a more general term).
+
+```{r downreg cluster cellline scatterplot}
+if (nrow(reducedTerms) > 2) {
+  revigo_scatterplot(simMatrix, reducedTerms)
+}
+```
+
+Revigo heatmap plot. Similar terms clustered
+
+```{r downreg cluster cellline heatmap}
+if (nrow(reducedTerms) > 2) {
+  heatmapPlot(simMatrix,
+    reducedTerms,
+    annotateParent = TRUE,
+    annotationLabel = "parentTerm",
+    fontsize = 6
+  )
+}
+```
+
+This is the same content, but interactive.
+
+```{r downreg cluster cellline heatmap2}
+if (nrow(reducedTerms) > 2) {
+  revigo_heatmap(simMatrix, reducedTerms)
+}
+```
+
+Revigo treemap plot. Terms grouped/colored based on parent. Space is proportional to statistical significance of the GO term (-log10(pvalue)).
+
+```{r downreg cluster cellline treemap}
+if (nrow(reducedTerms) > 2) {
+  treemapPlot(reducedTerms)
+}
+```

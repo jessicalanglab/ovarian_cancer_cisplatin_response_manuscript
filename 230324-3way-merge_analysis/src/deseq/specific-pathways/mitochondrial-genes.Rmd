@@ -1,0 +1,304 @@
+---
+title: "Genes regulating mitochondrial pathways in OVCAR 4A and 4B"
+output: html_notebook
+---
+
+## Introduction
+
+OVCAR4A and 4B both showed a number of mitochondrial pathways that were downregulated. This notebook looks into the genes driving those pathways' regulation. Of note, neither OVCAR4A nor 4B had any upregulated mitochondrial pathways.
+
+## Inputs
+
+Inputs consisted of
+
+-   Metadata spreadsheet for DESeq2
+-   salmon.merged.gene_tpm.tsv
+-   Results from deseq-analysis.Rmd
+
+```{r load packages, include=FALSE}
+library(tidyverse)
+library(readxl)
+library(DESeq2)
+library(vsn)
+library(pheatmap)
+library(RColorBrewer)
+library(ggrepel)
+library(biomaRt)
+library(DESeqAnalysis)
+library(UpSetR)
+library(gprofiler2)
+library(rrvgo)
+library(GO.db)
+library(ggfortify)
+GO <- as.list(GOTERM)
+library(clusterProfiler)
+library(enrichplot)
+library(plotly)
+library("org.Hs.eg.db")
+library(ggbeeswarm)
+library(ggforce)
+```
+
+### Read in metadata table
+
+```{r}
+sensitive_resistant_pairs <- c("OVCAR3A_vs_OVCAR3", "OVCAR3B_vs_OVCAR3", "OVCAR4A_vs_OVCAR4", "OVCAR4B_vs_OVCAR4", "PEA2_vs_PEA1", "PEO6_vs_PEO1", "PEO4_vs_PEO1")
+
+isolines <- data.frame(pair = sensitive_resistant_pairs,
+                       isoline = c("OVCAR3",
+                                   "OVCAR3",
+                                   "OVCAR4",
+                                   "OVCAR4",
+                                   "PEA",
+                                   "PEO",
+                                   "PEO"))
+```
+
+```{r load metatable}
+metadata.all <- as.data.frame(read.table("deseq/metadata.csv", sep = ",", header = TRUE))
+rownames(metadata.all) <- metadata.all$ShortName
+
+# Should put this in the metadata file, but just doing this to save time
+for (row in 1:nrow(metadata.all)) {
+    isogenicRank <- 1
+    resistant <- 0
+    if (metadata.all$CellLine[row] %in% list("OVCAR3A", "OVCAR4A", "PEA2", "PEO4")) {
+      isogenicRank <- 2
+      resistant <- 1
+    } else if (metadata.all$CellLine[row] %in% list("OVCAR3B", "OVCAR4B", "PEO6")) {
+      isogenicRank <- 3
+      resistant <- 1
+    }
+    metadata.all$IsogenicRank[row] <- isogenicRank
+    metadata.all$Resistant[row] <- resistant
+}
+metadata.all
+```
+
+### Load TPM matrix
+```{r}
+TPM <- as.matrix(read.delim("../star_salmon/salmon.merged.gene_tpm.tsv", sep="\t", row.names="gene_id"))
+TPM <- TPM[,-1]
+TPM <- matrix(as.numeric(TPM), ncol = ncol(TPM), dimnames = list(rownames(TPM), colnames(TPM)))
+TPM.log <- log(TPM + 1)
+colnames(TPM.log) <- metadata.all$ShortName
+as.data.frame(TPM.log)
+```
+
+## OVCAR4 downregulated mitochondrial pathways
+
+Pulling the genes related to mitochondrial pathways regulated in OVCAR4.
+
+```{r}
+# Get pathways consistently regulated in either OVCAR4A or OVCAR4B related to mitochondria
+pathways_file = "deseq/output/differential_pathways_all_sensitive_resistant_pairs.csv"
+pathways = as.data.frame(read.csv(pathways_file, sep = ",", header = TRUE, row.names = 1))
+
+pathways$OVCAR4A_sig_reg = pathways$OVCAR4A_vs_OVCAR4_padj %>%
+  map_lgl(\(padj) !is.na(padj) && padj < 0.05)
+pathways$OVCAR4B_sig_reg = pathways$OVCAR4B_vs_OVCAR4_padj %>%
+  map_lgl(\(padj) !is.na(padj) && padj < 0.05)
+OVCAR4_pathways = pathways[pathways$OVCAR4A_sig_reg == TRUE | pathways$OVCAR4B_sig_reg, c("Description", "OVCAR4A_vs_OVCAR4_padj", "OVCAR4A_vs_OVCAR4_NES", "OVCAR4B_vs_OVCAR4_padj", "OVCAR4B_vs_OVCAR4_NES")]
+
+print(OVCAR4_pathways)
+
+# Save OVCAR4 pathways so that it can be annotated for pathways related to the mitochondria
+OVCAR4_pathways_formatted = OVCAR4_pathways
+OVCAR4_pathways_formatted$GO_id = rownames(OVCAR4_pathways_formatted)
+OVCAR4_pathways_formatted$Mitochondrial = NA
+OVCAR4_pathways_formatted = OVCAR4_pathways_formatted[, c("GO_id", "Description", "Mitochondrial")]
+write.csv(OVCAR4_pathways_formatted, file = "deseq/output/OVCAR4_sig_regulated_mitochondrial_pathways.csv")
+```
+### Mitochondrial pathway annotation
+
+Kristin hand-annotated the pathways regulated in either 4A or 4B as to whether or not each pathway is related to mitochondria. This is saved as `OVCAR4_sig_regulated_mitochondrial_pathways_annotated.csv`
+Note: This list of relevant mitochondrial pathways would need to be updated if the regulated pathways changes.
+
+## Mitochondrial genes of interest
+
+Genes of interest are the genes that -- for any significantly regulated pathway in OVCAR4A or OVCAR4B -- were part of the core enrichment genes for that pathway and had a differential expression padj < 0.005. (Low padj value chosen to get down to a reasonable number of genes to view plots of.) Core enrichment genes are the most upregulated genes in upregulated pathways or the most downregulated genes in downregulated pathways
+
+```{r}
+# Subset only the pathways that are related to the mitochondria
+OVCAR4_mitochondrial_pathways = as.data.frame(read.csv("deseq/specific-pathways/OVCAR4_sig_regulated_mitochondrial_pathways_annotated.csv", sep = ",", header = TRUE, row.names = 1))
+OVCAR4_mitochondrial_pathways = OVCAR4_mitochondrial_pathways[OVCAR4_mitochondrial_pathways$Mitochondrial %in% c("Y", "y"),]
+
+get_core_mitochondrial_enrichment_genes = function(cellline_pathways_file, deseq_results_file, name) {
+  cellline_pathways = as.data.frame(read.csv(cellline_pathways_file, sep = ",", header = TRUE, row.names = 1))
+  cellline_deseq_res = as.data.frame(read.csv(deseq_results_file, sep = ",", header = TRUE, row.names = 1))
+  
+  cellline_genes_of_interest = c()
+  
+  for (row in 1:nrow(OVCAR4_mitochondrial_pathways)) {
+    id = rownames(OVCAR4_mitochondrial_pathways)[row]
+    
+    if (id %in% rownames(cellline_pathways)) {
+      core_enrichment_genes = str_split(cellline_pathways[rownames(cellline_pathways) == id, "core_enrichment_genes"], "/")[[1]]
+      # Because there were 200-300 core enrichment genes related to mitochondrial pathways in OVCAR4 generally, we want to have a stricter definition of our genes of interest
+      core_genes_res = cellline_deseq_res[rownames(cellline_deseq_res) %in% core_enrichment_genes, c("log2FoldChange", "padj")]
+      genes_of_interest = core_genes_res[!is.na(core_genes_res$padj) & core_genes_res$padj < 0.005,]
+      
+      cellline_genes_of_interest = c(cellline_genes_of_interest, rownames(genes_of_interest))
+    }
+  }
+  
+  if (length(cellline_genes_of_interest) > 0) {
+    df = as.data.frame(table(cellline_genes_of_interest))
+    colnames(df) = c("gene", name)
+    return(df)
+  } else {
+    return(data.frame(gene = c(),
+                      count = c()))
+  }
+  
+}
+```
+
+```{r}
+
+df_1 = get_core_mitochondrial_enrichment_genes("deseq/output/OVCAR4A_vs_OVCAR4_significantly_downregulated_pathways.csv",
+                                          "deseq/output/OVCAR4A_vs_OVCAR4_deseq_results.csv",
+                                          "important_in_4A_down_pathways")
+
+df_2 = get_core_mitochondrial_enrichment_genes("deseq/output/OVCAR4B_vs_OVCAR4_significantly_downregulated_pathways.csv",
+                                          "deseq/output/OVCAR4B_vs_OVCAR4_deseq_results.csv",
+                                          "important_in_4B_down_pathways")
+
+df_3 = get_core_mitochondrial_enrichment_genes("deseq/output/OVCAR4A_vs_OVCAR4_significantly_upregulated_pathways.csv",
+                                          "deseq/output/OVCAR4A_vs_OVCAR4_deseq_results.csv",
+                                          "important_in_4A_up_pathways")
+
+df_4 = as.data.frame(get_core_mitochondrial_enrichment_genes("deseq/output/OVCAR4B_vs_OVCAR4_significantly_upregulated_pathways.csv",
+                                          "deseq/output/OVCAR4B_vs_OVCAR4_deseq_results.csv",
+                                          "important_in_4B_up_pathways"))
+
+genes_of_interest = merge(df_1, df_2, by = "gene", all = TRUE)
+
+if (nrow(df_3) != 0) {
+  print("Upregulated genes found! Will need to update the titles of the plots")
+  genes_of_interest = merge(genes_of_interest, df_3, by = "gene", all = TRUE)
+}
+
+if (nrow(df_4) != 0) {
+  print("Upregulated genes found! Will need to update the titles of the plots")
+  genes_of_interest = merge(genes_of_interest, df_4, by = "gene", all = TRUE)
+}
+
+# Replace all NA values with 0 in the entire data frame
+genes_of_interest <- replace(genes_of_interest, is.na(genes_of_interest), 0)
+
+print(genes_of_interest)
+
+```
+
+## Plot the genes of interest important for regulated mitochondrial pathways in OVCAR4 resistant lines
+
+Need to access the deseq gene-level data to include padj values per cellline in the plots
+```{r}
+# Need Deseq gene data for significance of each gene within a cellline
+gene_deseq_file = "deseq/output/differential_gene_expression_all_sensitive_resistant_pairs.csv"
+gene_deseq = as.data.frame(read.csv(gene_deseq_file, sep = ",", header = TRUE, row.names = 1))
+padj_gene_data <- gene_deseq %>%
+  select(contains("padj"))
+
+# Reformat column names to just use the resistant cellline
+colnames(padj_gene_data) = colnames(padj_gene_data) %>%
+  map_chr(\(colname) str_split(colname, "_")[[1]][[1]][[1]])
+
+print(padj_gene_data)
+```
+
+Plots based on the transcripts per million data for the genes driving the mitochondrial pathways. Note: Would need to update title if the regulated paths change and there are upregulated mitochondrial paths
+
+```{r}
+TPM.log <- as.data.frame(TPM.log)
+TPM.log.genes.interesting <- cbind(metadata.all, as.data.frame(t(TPM.log[rownames(TPM.log) %in% genes_of_interest$gene,])))
+
+# To plot each gene separately:
+for(row in 1:nrow(genes_of_interest))
+{
+  gene = as.character(genes_of_interest[row, "gene"])
+  num_4A_down = as.numeric(genes_of_interest[row, "important_in_4A_down_pathways"])
+  num_4B_down = as.numeric(genes_of_interest[row, "important_in_4B_down_pathways"])
+  
+  # title = str_interp("${gene} (# downregulated paths affected: 4A - ${num_4A_down}; 4B - ${num_4B_down}. upreg paths: none)")
+  title = gene
+  plotData <- TPM.log.genes.interesting[, c("CellLine", "IsoLine", gene)]
+  colnames(plotData)[3] <- "log.TPM"
+  
+  # Collect significance data for each cellline
+  sigData <- data.frame(CellLine = unique(plotData$CellLine))
+  sigData$significant = sigData$CellLine %>%
+    map_lgl(\(cellline) !is.na(padj_gene_data[gene, cellline]) && (padj_gene_data[gene, cellline] < 0.05))
+  plotData$significance = rownames(plotData) %>%
+    map_chr(\(rowname) {
+      cellline = plotData[rowname, "CellLine"]
+      significance = sigData[sigData$CellLine == cellline, "significant"]
+      label = ifelse(!is.na(significance) && significance, "*", "")
+      return(label)
+    })
+  plotData$sig_height = rownames(plotData) %>% # Label significance 15% higher than highest value
+    map_dbl(\(rowname) {
+      cellline = plotData[rowname, "CellLine"]
+      isoline = plotData[rowname, "IsoLine"]
+      rep_values = plotData[plotData$CellLine == cellline, "log.TPM"]
+      isoline_values = plotData[plotData$IsoLine == isoline, "log.TPM"]
+      height = min(isoline_values) + 1.15 * (max(rep_values) - min(isoline_values))
+      return(height)
+    })
+  
+  plotData$label_height = rownames(plotData) %>% # Label name of cellline 10% higher than highest value
+    map_dbl(\(rowname) {
+      cellline = plotData[rowname, "CellLine"]
+      isoline = plotData[rowname, "IsoLine"]
+      rep_values = plotData[plotData$CellLine == cellline, "log.TPM"]
+      isoline_values = plotData[plotData$IsoLine == isoline, "log.TPM"]
+      height = min(isoline_values) + 1.10 * (max(rep_values) - min(isoline_values))
+      return(height)
+    })
+  
+  # For setting ylim
+  range_values = max(max(plotData$log.TPM), max(plotData$sig_height)) - min(plotData$log.TPM)
+  
+  print(
+    ggplot(plotData, aes(CellLine, log.TPM, color = CellLine,)) +
+      geom_beeswarm(alpha = 0.3, show.legend = FALSE) +
+      geom_boxplot(outlier.shape = NA, fill = NA) +
+      geom_text(y = plotData$sig_height, size = 10, label = plotData$significance) +
+      geom_text(y = plotData$label_height, size = 2, label = plotData$CellLine) +
+      ylim(min(plotData$log.TPM) - 0.1 * range_values, max(plotData$log.TPM) + 0.15 * range_values) + 
+      theme_classic() +
+      theme(axis.title.x=element_blank(),
+            axis.text.x=element_blank(),
+            axis.ticks.x=element_blank()) +
+      ggtitle(title))
+}
+```
+
+
+<!-- ```{r} -->
+<!-- # To plot them all together: -->
+
+<!-- # # make long version of table -->
+<!-- # long.data <- gather(TPM.log.genes.interesting, key="Gene", value="logTPM", AARS2:YARS2) -->
+<!-- #      -->
+<!-- # plot <- ggplot(long.data, aes(CellLine, logTPM, fill = Gene, color = CellLine,)) + -->
+<!-- #       # geom_beeswarm(alpha = 0.3) + -->
+<!-- #       geom_boxplot(outlier.shape = NA, fill = NA) + -->
+<!-- #       theme_classic() + -->
+<!-- #       theme(axis.title.x=element_blank(), -->
+<!-- #             axis.text.x=element_blank(), -->
+<!-- #             axis.ticks.x=element_blank()) + -->
+<!-- #       facet_wrap_paginate(vars(Gene), nrow = 1, ncol = 5) -->
+<!-- #  -->
+<!-- # for(i in 1:n_pages(plot)) -->
+<!-- #   print( -->
+<!-- #    ggplot(long.data, aes(CellLine, logTPM, fill = Gene, color = CellLine,)) + -->
+<!-- #       # geom_beeswarm(alpha = 0.3) + -->
+<!-- #       geom_boxplot(outlier.shape = NA, fill = NA) + -->
+<!-- #       theme_classic() + -->
+<!-- #       theme(axis.title.x=element_blank(), -->
+<!-- #             axis.text.x=element_blank(), -->
+<!-- #             axis.ticks.x=element_blank()) + -->
+<!-- #       facet_wrap_paginate(vars(Gene), nrow = 1, ncol = 5, page = i)) -->
+<!-- ``` -->
