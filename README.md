@@ -61,3 +61,7 @@ We used MAGIC, a tool presented in [Roopra, 2020](https://journals.plos.org/plos
 - [MAGIC analysis (launches each sensitive-resistant pair)](230324-3way-merge_analysis/src/magic/magic-analysis.Rmd)
 - [MAGIC analysis (single sensitive-resistant pair)](230324-3way-merge_analysis/src/magic/single-sensitive-resistant-pair-magic-analysis.Rmd)
 - [MAGIC analysis (generated notebooks per sensitive-resistant pair)](230324-3way-merge_analysis/src/magic/generated-notebooks)
+
+## Subtype classification
+
+We attempted to develop a subtype classification method in order to compare our subtypes to clinical specimens. See [that README](subtype_classification/README.md) for details.
