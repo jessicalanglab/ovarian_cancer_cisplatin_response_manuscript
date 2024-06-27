@@ -7,4 +7,4 @@
 230324-3way-merge_analysis/src/deseq/specific-pathways/temp
 230324-3way-merge_analysis/src/magic/data
 230324-3way-merge_analysis/src/magic/differential_tfs
-230324-3way-merge_analysis/src/magic/gene_clusters
+subtype_classification/data

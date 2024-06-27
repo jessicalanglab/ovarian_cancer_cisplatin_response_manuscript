@@ -1,0 +1,125 @@
+---
+title: "Differential analysis"
+output: html_notebook
+---
+
+## Imports
+
+```{r load packages, include=FALSE}
+library(DESeq2)
+library(tidyverse)
+```
+
+## Load data
+
+```{r}
+pycombat_batch_corrected_counts_path = "data/batch_corrected_data/pycombat_batch_corrected_counts.tsv"
+metadata_path = "data/formatted_rnaseq_data/metadata.tsv"
+pycombat_batch_corrected_dex_results_path = "data/differential_analysis/pycombat_batch_corrected_dex_results.tsv"
+pycombat_batch_corrected_dex_selected_genes_path = "data/differential_analysis/pycombat_batch_corrected_dex_selected_genes.tsv"
+```
+
+```{r}
+pycombat_batch_corrected_counts = as.data.frame(read.table(
+  pycombat_batch_corrected_counts_path,
+  sep = "\t",
+  header = TRUE,
+  row.names = 1
+))
+
+print(pycombat_batch_corrected_counts)
+
+metadata = as.data.frame(read.table(
+  metadata_path,
+  sep = "\t",
+  header = TRUE,
+  row.names = 1
+))
+
+print(metadata)
+```
+
+## DESeq
+
+### Setup dds
+
+```{r}
+design = ~ type + dataset_name
+
+dds = DESeqDataSetFromMatrix(
+  countData = pycombat_batch_corrected_counts,
+  colData = metadata,
+  design = design)
+```
+
+### Run deseq
+
+```{r}
+dds <- DESeq(dds, test="LRT", reduced = ~ dataset_name)
+save(dds, file = paste0("data/differential_analysis/pycombat_batch_corrected_counts_dds.RData"))
+```
+### Examine results
+
+```{r}
+res = as.data.frame(results(dds))
+
+# Format results
+res = as.data.frame(res)
+res = res %>% 
+  relocate(padj) %>%
+  relocate(pvalue)
+
+print(res)
+
+res_path = paste0(pycombat_batch_corrected_dex_results_path)
+write.table(res, file = res_path, sep = "\t")
+```
+## Select features
+
+Visualize spread of l2fc values to determine a sensible cutoff for feature selection. Note that l2fc does not have a direct meaning since we're doing an LRT test.
+
+```{r}
+# Calculate the cumulative count
+res$abs_l2fc = abs(res$log2FoldChange)
+sorted_abs_l2fc <- sort(res$abs_l2fc)
+cumulative_counts <- cumsum(table(sorted_abs_l2fc))
+
+# Plot the cumulative counts
+plot(names(cumulative_counts), cumulative_counts, 
+     type="s",  # Step plot
+     main="Cumulative Count Plot for L2FC of genes",
+     xlab="L2FC Value", 
+     ylab="Cumulative Count",
+     col="blue")
+
+cutoff = 2 # Chosen from looking at the plot
+# Add a horizontal line at cutoff
+abline(v = cutoff, col="red", lty=2)
+
+selected_genes = res[res$abs_l2fc > cutoff,]
+print(selected_genes)
+
+selected_genes_path = paste0(pycombat_batch_corrected_dex_selected_genes_path)
+write.table(selected_genes, file = selected_genes_path, sep = "\t")
+
+
+# # Identify inflection point
+# x_values <- as.numeric(names(cumulative_counts))
+# y_values <- as.numeric(cumulative_counts)
+# 
+# # Approximate first and second derivatives
+# first_derivative <- diff(y_values)
+# second_derivative <- diff(first_derivative)
+# 
+# inflection_point_index <- which(diff(sign(second_derivative)) != 0) + 1
+# inflection_point <- x_values[inflection_point_index]
+# 
+# # Add the inflection point to the plot
+# points(inflection_point, y_values[inflection_point_index], col="red", pch=19)
+# abline(v = inflection_point, col="red", lty=2)
+# 
+# # Print the inflection point
+# print(paste("Inflection point at x =", inflection_point))
+
+```
+
