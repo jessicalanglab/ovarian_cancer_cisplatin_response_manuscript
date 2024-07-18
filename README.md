@@ -65,3 +65,7 @@ We used MAGIC, a tool presented in [Roopra, 2020](https://journals.plos.org/plos
 ## Subtype classification
 
 We attempted to develop a subtype classification method in order to compare our subtypes to clinical specimens. See [that README](subtype_classification/README.md) for details.
+
+## GEO upload metadata
+
+Contains scripts used to create GEO metadata for our data uploads. See [that README](geo_metadata/README.md) for details.
